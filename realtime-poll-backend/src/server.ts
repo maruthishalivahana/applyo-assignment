@@ -34,6 +34,7 @@ app.use("/api/polls", pollRoutes);
 mongoose
     .connect(process.env.MONGO_URI as string)
     .then(() => {
+        console.log("MongoDB connected successfully");
         server.listen(5000, () =>
             console.log("Server running on port 5000")
         );
