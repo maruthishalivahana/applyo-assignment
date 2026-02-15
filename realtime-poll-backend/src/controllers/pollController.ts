@@ -50,10 +50,23 @@ export const getPoll = async (req: Request, res: Response) => {
                 message: "Poll not found"
             })
         }
+
+        // Check if user has already voted and get their choice
+        const voteToken = req.headers["x-vote-token"] as string | undefined;
+        console.log("Received vote token in getPoll:", voteToken);
+        console.log("Poll tokenVotes:", poll.tokenVotes);
+        let userVotedOption: number | null = null;
+
+        if (voteToken && poll.tokenVotes) {
+            userVotedOption = poll.tokenVotes.get(voteToken) ?? null;
+            console.log("User voted option found:", userVotedOption);
+        }
+
         res.status(200).json({
             success: true,
             message: "Poll retrieved successfully",
-            poll
+            poll,
+            userVotedOption
         })
 
     } catch (error) {
@@ -109,6 +122,12 @@ export const votePoll = async (req: Request, res: Response) => {
         // generate token
         const newToken = crypto.randomBytes(16).toString("hex");
         poll.votedTokens.push(newToken);
+
+        // Store which option this token voted for
+        if (!poll.tokenVotes) {
+            poll.tokenVotes = new Map();
+        }
+        poll.tokenVotes.set(newToken, optionIndex);
 
         await poll.save();
 

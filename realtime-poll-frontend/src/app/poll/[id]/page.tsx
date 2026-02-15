@@ -20,13 +20,23 @@ export default function PollPage() {
         if (!id) return;
 
         // Fetch initial poll data
-        api.get(`/polls/${id}`).then(res => {
+        const token = localStorage.getItem("voteToken");
+        console.log("Vote token from localStorage:", token);
+        api.get(`/polls/${id}`, {
+            headers: token ? { "x-vote-token": token } : {}
+        }).then(res => {
+            console.log("API Response:", res.data);
+            console.log("User voted option:", res.data.userVotedOption);
             setPoll(res.data.poll);
             // Check if user has already voted (by token)
-            const token = localStorage.getItem("voteToken");
             if (token && res.data.poll.votedTokens && Array.isArray(res.data.poll.votedTokens)) {
                 if (res.data.poll.votedTokens.includes(token)) {
                     setVoted(true);
+                    // Set the selected option if backend returned it
+                    if (res.data.userVotedOption !== null && res.data.userVotedOption !== undefined) {
+                        console.log("Setting selected option to:", res.data.userVotedOption);
+                        setSelectedOption(res.data.userVotedOption);
+                    }
                 }
             }
         });
@@ -36,8 +46,17 @@ export default function PollPage() {
             socket.connect();
         }
 
-        console.log("Joining poll room:", id);
-        socket.emit("joinPoll", id);
+        // Wait for connection before joining poll room
+        const joinPollRoom = () => {
+            console.log("Joining poll room:", id);
+            socket.emit("joinPoll", id);
+        };
+
+        if (socket.connected) {
+            joinPollRoom();
+        } else {
+            socket.once("connect", joinPollRoom);
+        }
 
         // Define handler function with proper reference
         const handleVoteUpdate = (updatedPoll: any) => {
@@ -52,6 +71,7 @@ export default function PollPage() {
         return () => {
             console.log("Leaving poll room:", id);
             socket.off("voteUpdate", handleVoteUpdate);
+            socket.off("connect", joinPollRoom);
             // Don't disconnect if other components might use it
             // socket.disconnect();
         };
@@ -137,7 +157,7 @@ export default function PollPage() {
                                     <button
                                         disabled={voted}
                                         onClick={() => vote(i)}
-                                        className={`relative w-full text-left group transition-all duration-300 outline-none
+                                        className={`relative w-full text-left group transition-all duration-300 outline-none rounded-xl
                     ${voted ? 'cursor-default' : 'hover:scale-[1.01] hover:shadow-md cursor-pointer'}
                     ${voted && isSelected ? 'ring-2 ring-indigo-500 scale-[1.02]' : ''}
                   `}
