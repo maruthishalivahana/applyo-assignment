@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { Plus, Trash2, BarChart3, AlignLeft, Share2, CheckCircle2 } from "lucide-react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { Suspense } from "react";
 
 function getPollLink(pollId: string) {
     if (typeof window !== "undefined") {
@@ -12,7 +13,15 @@ function getPollLink(pollId: string) {
     return `/poll/${pollId}`;
 }
 
-export default function CreatePollPage() {
+export default function CreatePollPageWrapper() {
+    return (
+        <Suspense fallback={<div>Loading...</div>}>
+            <CreatePollPage />
+        </Suspense>
+    );
+}
+
+function CreatePollPage() {
     const searchParams = useSearchParams();
     const router = useRouter();
     const initialQuestion = searchParams.get("question") || "";
