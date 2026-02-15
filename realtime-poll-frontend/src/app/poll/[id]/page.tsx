@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { socket } from "@/lib/socket";
 import { Share2, CheckCircle2, Loader2, BarChart2 } from "lucide-react";
+import toast from "react-hot-toast";
 
 export default function PollPage() {
     const params = useParams();
@@ -78,10 +79,16 @@ export default function PollPage() {
     }, [id]);
 
     const vote = async (index: number) => {
-        if (voted || !id) return;
+        if (voted || !id) {
+            if (voted) {
+                toast.error("You've already voted on this poll!");
+            }
+            return;
+        }
 
         // Optimistic UI update for immediate feedback
         setSelectedOption(index);
+        const loadingToast = toast.loading("Recording your vote...");
 
         const token = localStorage.getItem("voteToken");
         try {
@@ -95,8 +102,14 @@ export default function PollPage() {
             }
             setVoted(true);
             setSelectedOption(index);
+            toast.success("Vote recorded successfully!", { id: loadingToast });
         } catch (err: any) {
-            alert("Voting failed: " + (err?.response?.data?.message || err.message));
+            const errorMsg = err?.response?.data?.message || err.message;
+            if (errorMsg.includes("Already voted")) {
+                toast.error("You've already voted on this poll!", { id: loadingToast });
+            } else {
+                toast.error("Voting failed: " + errorMsg, { id: loadingToast });
+            }
             setSelectedOption(null); // Revert on failure
         }
     };
@@ -104,6 +117,7 @@ export default function PollPage() {
     const handleShare = () => {
         if (!id) return;
         navigator.clipboard.writeText(window.location.href);
+        toast.success("Poll link copied to clipboard!");
         setIsCopied(true);
         setTimeout(() => setIsCopied(false), 2000);
     };
@@ -111,7 +125,7 @@ export default function PollPage() {
     // --- Loading State ---
     if (!poll) return (
         <div className="min-h-[60vh] flex items-center justify-center">
-            <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+            <Loader2 className="w-8 h-8 text-[#1a6b3a] animate-spin" />
         </div>
     );
 
@@ -124,15 +138,15 @@ export default function PollPage() {
             <div className="w-full max-w-xl">
 
                 {/* Card Container */}
-                <div className="bg-white rounded-3xl shadow-xl shadow-indigo-100/50 border border-slate-100 overflow-hidden">
+                <div className="bg-white rounded-3xl shadow-xl shadow-green-100/50 border border-slate-100 overflow-hidden">
 
                     {/* Header */}
                     <div className="bg-slate-50/50 p-8 border-b border-slate-100">
                         <div className="flex items-center gap-2 mb-4">
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-bold uppercase tracking-wider">
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-green-50 text-green-700 text-xs font-bold uppercase tracking-wider">
                                 <span className="relative flex h-2 w-2">
-                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
                                 </span>
                                 Live Poll
                             </span>
@@ -159,13 +173,13 @@ export default function PollPage() {
                                         onClick={() => vote(i)}
                                         className={`relative w-full text-left group transition-all duration-300 outline-none rounded-xl
                     ${voted ? 'cursor-default' : 'hover:scale-[1.01] hover:shadow-md cursor-pointer'}
-                    ${voted && isSelected ? 'ring-2 ring-indigo-500 scale-[1.02]' : ''}
+                    ${voted && isSelected ? 'ring-2 ring-[#1a6b3a] scale-[1.02]' : ''}
                   `}
                                     >
                                         {/* Background Progress Bar (Only visible after voting) */}
                                         <div className="absolute inset-0 bg-slate-50 rounded-xl overflow-hidden border border-slate-200">
                                             <div
-                                                className={`h-full transition-all duration-1000 ease-out ${isSelected && voted ? 'bg-gradient-to-r from-indigo-500/20 to-violet-500/20' : 'bg-slate-200/50'
+                                                className={`h-full transition-all duration-1000 ease-out ${isSelected && voted ? 'bg-gradient-to-r from-green-500/20 to-green-600/20' : 'bg-slate-200/50'
                                                     }`}
                                                 style={{ width: voted ? `${percent}%` : '0%' }}
                                             />
@@ -175,29 +189,29 @@ export default function PollPage() {
                                         <div className={`relative p-4 flex items-center gap-3 z-10 rounded-xl border transition-all
                      ${voted
                                                 ? 'border-transparent'
-                                                : 'bg-white border-slate-200 hover:border-indigo-300 hover:ring-4 hover:ring-indigo-50'
+                                                : 'bg-white border-slate-200 hover:border-green-300 hover:ring-4 hover:ring-green-50'
                                             }
                      ${voted && isSelected ? 'bg-white/80' : ''}
                   `}>
                                             {/* Checkbox Circle UI */}
                                             <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors flex-shrink-0
                           ${isSelected && voted
-                                                    ? 'border-indigo-600 bg-indigo-600 text-white'
+                                                    ? 'border-[#1a6b3a] bg-[#1a6b3a] text-white'
                                                     : isSelected
-                                                        ? 'border-indigo-600 bg-indigo-600 text-white'
-                                                        : 'border-slate-300 group-hover:border-indigo-400'
+                                                        ? 'border-[#1a6b3a] bg-[#1a6b3a] text-white'
+                                                        : 'border-slate-300 group-hover:border-green-400'
                                                 }
                        `}>
                                                 {isSelected && <CheckCircle2 className="w-3.5 h-3.5" />}
                                             </div>
 
-                                            <span className={`font-medium flex-1 ${isSelected && voted ? 'text-indigo-900 font-semibold' : isSelected ? 'text-indigo-900' : 'text-slate-700'}`}>
+                                            <span className={`font-medium flex-1 ${isSelected && voted ? 'text-green-900 font-semibold' : isSelected ? 'text-green-900' : 'text-slate-700'}`}>
                                                 {opt.text}
                                             </span>
 
                                             {/* Show "Your vote" badge if selected and voted */}
                                             {voted && isSelected && (
-                                                <span className="px-2.5 py-1 bg-indigo-100 text-indigo-700 text-xs font-bold rounded-full">
+                                                <span className="px-2.5 py-1 bg-green-100 text-green-700 text-xs font-bold rounded-full">
                                                     Your Vote
                                                 </span>
                                             )}
@@ -207,7 +221,7 @@ export default function PollPage() {
                                     {/* Vote count and Percentage below option */}
                                     {voted && (
                                         <div className="pl-9 flex items-center justify-between gap-3 text-sm">
-                                            <span className={`font-bold ${isSelected ? 'text-indigo-600' : 'text-slate-600'}`}>
+                                            <span className={`font-bold ${isSelected ? 'text-[#1a6b3a]' : 'text-slate-600'}`}>
                                                 {percent}%
                                             </span>
                                             <span className="text-slate-500">
@@ -228,7 +242,7 @@ export default function PollPage() {
 
                         <button
                             onClick={handleShare}
-                            className="flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-4 py-2 rounded-lg transition-colors cursor-pointer"
+                            className="flex items-center gap-2 text-sm font-semibold text-[#1a6b3a] hover:text-[#166534] bg-green-50 hover:bg-green-100 px-4 py-2 rounded-lg transition-colors cursor-pointer"
                         >
                             {isCopied ? (
                                 <>

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Poppins } from "next/font/google"; //  Poppins font family from Google Fonts
+import { Toaster } from "react-hot-toast";
 import "./globals.css";
 
 // 2. Configure Poppins
@@ -25,11 +26,41 @@ export default function RootLayout({
       <body
         // 3. Apply 'poppins.className' here. 
         // This instantly sets the font-family for the whole app.
-        className={`${poppins.className} antialiased bg-slate-50 text-slate-900 selection:bg-indigo-100 selection:text-indigo-700`}
+        className={`${poppins.className} antialiased bg-[#f0e8d0] text-slate-900 selection:bg-green-100 selection:text-green-800`}
       >
+        <Toaster
+          position="top-center"
+          reverseOrder={false}
+          toastOptions={{
+            duration: 3000,
+            style: {
+              background: '#fff',
+              color: '#1e293b',
+              boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
+              border: '1px solid #e2e8f0',
+              padding: '16px',
+              borderRadius: '12px',
+              fontSize: '14px',
+              fontWeight: '500',
+            },
+            success: {
+              iconTheme: {
+                primary: '#1a6b3a',
+                secondary: '#fff',
+              },
+            },
+            error: {
+              iconTheme: {
+                primary: '#ef4444',
+                secondary: '#fff',
+              },
+            },
+          }}
+        />
+
         {/* PREMIUM BACKGROUND GLOW */}
-        <div className="fixed inset-0 -z-10 h-full w-full bg-slate-50">
-          <div className="absolute top-0 z-[-2] h-screen w-screen bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(120,119,198,0.3),rgba(255,255,255,0))]"></div>
+        <div className="fixed inset-0 -z-10 h-full w-full bg-[#f0e8d0]">
+          <div className="absolute top-0 z-[-2] h-screen w-screen bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(107,145,112,0.3),rgba(255,255,255,0))]"></div>
         </div>
 
         <Navbar />
@@ -44,16 +75,16 @@ export default function RootLayout({
 
 function Navbar() {
   return (
-    <nav className="sticky top-0 z-50 border-b border-slate-200 bg-white/70 backdrop-blur-md">
+    <nav className="sticky top-0 z-50 border-b border-green-200 bg-white/70 backdrop-blur-md">
       <div className="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
         {/* Added 'font-bold' to make Poppins look extra crisp here */}
-        <h1 className="text-xl font-bold tracking-tight text-indigo-600">
+        <h1 className="text-xl font-bold tracking-tight text-[#1a6b3a]">
           Pollify
         </h1>
 
         <div className="space-x-6 text-sm font-medium text-slate-600">
-          <a href="/" className="hover:text-indigo-600 transition-colors">Home</a>
-          <a href="/create" className="hover:text-indigo-600 transition-colors">Create Poll</a>
+          <a href="/" className="hover:text-[#1a6b3a] transition-colors">Home</a>
+          <a href="/create" className="hover:text-[#1a6b3a] transition-colors">Create Poll</a>
         </div>
       </div>
     </nav>
