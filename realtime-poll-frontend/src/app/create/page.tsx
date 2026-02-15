@@ -179,7 +179,10 @@ function CreatePollPage() {
 
                     {/* Action Buttons */}
                     <div className="pt-4 flex items-center justify-end gap-4">
-                        <button className="px-6 py-3 text-sm font-semibold text-gray-600 hover:text-gray-900 transition-colors cursor-pointer">
+                        <button
+                            onClick={() => router.push('/')}
+                            className="px-6 py-3 text-sm font-semibold text-gray-600 hover:text-gray-900 transition-colors cursor-pointer"
+                        >
                             Cancel
                         </button>
                         <button
