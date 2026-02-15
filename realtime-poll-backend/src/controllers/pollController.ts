@@ -53,13 +53,20 @@ export const getPoll = async (req: Request, res: Response) => {
 
         // Check if user has already voted and get their choice
         const voteToken = req.headers["x-vote-token"] as string | undefined;
+        const clientId = req.headers["x-client-id"] as string | undefined;
         console.log("Received vote token in getPoll:", voteToken);
+        console.log("Received clientId in getPoll:", clientId);
         console.log("Poll tokenVotes:", poll.tokenVotes);
         let userVotedOption: number | null = null;
 
+        // Check both token and clientId for vote tracking
         if (voteToken && poll.tokenVotes) {
             userVotedOption = poll.tokenVotes.get(voteToken) ?? null;
-            console.log("User voted option found:", userVotedOption);
+            console.log("User voted option found (token):", userVotedOption);
+        }
+        if (!userVotedOption && clientId && poll.tokenVotes) {
+            userVotedOption = poll.tokenVotes.get(clientId) ?? null;
+            console.log("User voted option found (clientId):", userVotedOption);
         }
 
         res.status(200).json({
@@ -81,8 +88,8 @@ export const votePoll = async (req: Request, res: Response) => {
     try {
         const { optionIndex } = req.body;
 
-        const ip = req.ip || "unknown";
         const voteToken = req.headers["x-vote-token"] as string | undefined;
+        const clientId = req.headers["x-client-id"] as string | undefined;
 
         const poll = await Poll.findById(req.params.id);
         if (!poll) {
@@ -99,15 +106,7 @@ export const votePoll = async (req: Request, res: Response) => {
             });
         }
 
-        // fairness 1: IP method
-        // if (poll.votedIPs.includes(ip)) {
-        //     return res.status(403).json({
-        //         success: false,
-        //         message: "Already voted (IP)"
-        //     });
-        // }
-
-        //  fairness 2: Token method
+        // Fairness 1: Token method
         if (voteToken && poll.votedTokens.includes(voteToken)) {
             return res.status(403).json({
                 success: false,
@@ -115,19 +114,35 @@ export const votePoll = async (req: Request, res: Response) => {
             });
         }
 
-        //  vote
-        poll.options[optionIndex].votes += 1;
-        // poll.votedIPs.push(ip);
+        // Fairness 2: Client ID method
+        if (clientId && poll.votedClients.includes(clientId)) {
+            return res.status(403).json({
+                success: false,
+                message: "Already voted (Client)"
+            });
+        }
 
-        // generate token
+        // Record vote
+        poll.options[optionIndex].votes += 1;
+
+        // Generate and store token
         const newToken = crypto.randomBytes(16).toString("hex");
         poll.votedTokens.push(newToken);
 
-        // Store which option this token voted for
+        // Store clientId if provided
+        if (clientId) {
+            poll.votedClients.push(clientId);
+        }
+
+        // Store which option was selected (for "Your Vote" badge persistence)
         if (!poll.tokenVotes) {
             poll.tokenVotes = new Map();
         }
+        // Store both token and clientId mappings
         poll.tokenVotes.set(newToken, optionIndex);
+        if (clientId) {
+            poll.tokenVotes.set(clientId, optionIndex);
+        }
 
         await poll.save();
 

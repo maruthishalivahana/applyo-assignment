@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { socket } from "@/lib/socket";
+import { getClientId } from "@/lib/clientId";
 import { Share2, CheckCircle2, Loader2, BarChart2 } from "lucide-react";
 import toast from "react-hot-toast";
 
@@ -22,22 +23,29 @@ export default function PollPage() {
 
         // Fetch initial poll data
         const token = localStorage.getItem("voteToken");
+        const clientId = getClientId();
         console.log("Vote token from localStorage:", token);
+        console.log("ClientId from localStorage:", clientId);
         api.get(`/polls/${id}`, {
-            headers: token ? { "x-vote-token": token } : {}
+            headers: {
+                ...(token && { "x-vote-token": token }),
+                ...(clientId && { "x-client-id": clientId })
+            }
         }).then(res => {
             console.log("API Response:", res.data);
             console.log("User voted option:", res.data.userVotedOption);
             setPoll(res.data.poll);
-            // Check if user has already voted (by token)
-            if (token && res.data.poll.votedTokens && Array.isArray(res.data.poll.votedTokens)) {
-                if (res.data.poll.votedTokens.includes(token)) {
-                    setVoted(true);
-                    // Set the selected option if backend returned it
-                    if (res.data.userVotedOption !== null && res.data.userVotedOption !== undefined) {
-                        console.log("Setting selected option to:", res.data.userVotedOption);
-                        setSelectedOption(res.data.userVotedOption);
-                    }
+
+            // Check if user has already voted (by token OR clientId)
+            const hasVotedByToken = token && res.data.poll.votedTokens && Array.isArray(res.data.poll.votedTokens) && res.data.poll.votedTokens.includes(token);
+            const hasVotedByClient = clientId && res.data.poll.votedClients && Array.isArray(res.data.poll.votedClients) && res.data.poll.votedClients.includes(clientId);
+
+            if (hasVotedByToken || hasVotedByClient) {
+                setVoted(true);
+                // Set the selected option if backend returned it
+                if (res.data.userVotedOption !== null && res.data.userVotedOption !== undefined) {
+                    console.log("Setting selected option to:", res.data.userVotedOption);
+                    setSelectedOption(res.data.userVotedOption);
                 }
             }
         });
@@ -91,11 +99,18 @@ export default function PollPage() {
         const loadingToast = toast.loading("Recording your vote...");
 
         const token = localStorage.getItem("voteToken");
+        const clientId = getClientId();
+
         try {
             const res = await api.post(
                 `/polls/${id}/vote`,
                 { optionIndex: index },
-                { headers: token ? { "x-vote-token": token } : {} }
+                {
+                    headers: {
+                        ...(token && { "x-vote-token": token }),
+                        ...(clientId && { "x-client-id": clientId })
+                    }
+                }
             );
             if (res.data.voteToken) {
                 localStorage.setItem("voteToken", res.data.voteToken);

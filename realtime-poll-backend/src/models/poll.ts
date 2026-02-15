@@ -8,9 +8,9 @@ interface IOption {
 export interface IPoll extends Document {
     question: string;
     options: IOption[];
-    votedIPs: string[];
     votedTokens: string[];
-    tokenVotes: Map<string, number>; // Maps token to optionIndex
+    votedClients: string[]; // Client ID-based fairness
+    tokenVotes: Map<string, number>; // Maps token/clientId to optionIndex
 }
 
 const optionSchema = new Schema<IOption>({
@@ -22,13 +22,13 @@ const pollSchema = new Schema<IPoll>(
     {
         question: { type: String, required: true },
         options: [optionSchema],
-        votedIPs: [String],
-        votedTokens: [String],  // second method to prevent multiple votes, can be used with  tokens
+        votedTokens: [String],  // Token-based fairness
+        votedClients: [String], // Client ID-based fairness
         tokenVotes: {
             type: Map,
             of: Number,
             default: new Map()
-        }  // Maps token to optionIndex
+        }  // Maps token/clientId to optionIndex
     },
     { timestamps: true }
 );
