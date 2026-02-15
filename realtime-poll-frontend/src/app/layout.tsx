@@ -75,7 +75,7 @@ export default function RootLayout({
 
 function Navbar() {
   return (
-    <nav className="sticky top-0 z-50 border-b border-green-200 bg-white/70 backdrop-blur-md">
+    <nav className="sticky top-0 z-50 border-b border-green-100 bg-white/70 backdrop-blur-md">
       <div className="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
         {/* Added 'font-bold' to make Poppins look extra crisp here */}
         <h1 className="text-xl font-bold tracking-tight text-[#1a6b3a]">

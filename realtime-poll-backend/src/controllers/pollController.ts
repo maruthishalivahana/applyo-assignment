@@ -54,19 +54,14 @@ export const getPoll = async (req: Request, res: Response) => {
         // Check if user has already voted and get their choice
         const voteToken = req.headers["x-vote-token"] as string | undefined;
         const clientId = req.headers["x-client-id"] as string | undefined;
-        console.log("Received vote token in getPoll:", voteToken);
-        console.log("Received clientId in getPoll:", clientId);
-        console.log("Poll tokenVotes:", poll.tokenVotes);
         let userVotedOption: number | null = null;
 
         // Check both token and clientId for vote tracking
         if (voteToken && poll.tokenVotes) {
             userVotedOption = poll.tokenVotes.get(voteToken) ?? null;
-            console.log("User voted option found (token):", userVotedOption);
         }
         if (!userVotedOption && clientId && poll.tokenVotes) {
             userVotedOption = poll.tokenVotes.get(clientId) ?? null;
-            console.log("User voted option found (clientId):", userVotedOption);
         }
 
         res.status(200).json({
@@ -147,9 +142,11 @@ export const votePoll = async (req: Request, res: Response) => {
         await poll.save();
 
         const io = req.app.get("io") as Server;
-        console.log(`Emitting voteUpdate to room: ${poll._id.toString()}`);
-        io.to(poll._id.toString()).emit("voteUpdate", poll);
-        console.log(`Vote update emitted for poll: ${poll._id.toString()}`);
+        try {
+            io.to(poll._id.toString()).emit("voteUpdate", poll);
+        } catch (socketError) {
+            console.error("Failed to emit vote update via socket:", socketError);
+        }
 
         return res.status(200).json({
             success: true,

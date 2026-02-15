@@ -25,17 +25,21 @@ app.use(cors());
 app.use(express.json());
 
 io.on("connection", (socket) => {
-    console.log("User connected:", socket.id);
-
     socket.on("joinPoll", (pollId: string) => {
-        console.log(`Socket ${socket.id} joining poll room: ${pollId}`);
         socket.join(pollId);
-        console.log(`Socket ${socket.id} joined poll room: ${pollId}`);
     });
 
     socket.on("disconnect", () => {
-        console.log("User disconnected:", socket.id);
+        // Socket disconnected
     });
+
+    socket.on("error", (error) => {
+        console.error("Socket error:", error);
+    });
+});
+
+io.on("connect_error", (error) => {
+    console.error("Socket.IO connection error:", error);
 });
 
 // make io available in controllers
@@ -48,9 +52,11 @@ const PORT = process.env.PORT || 5000;
 mongoose
     .connect(process.env.MONGO_URI as string)
     .then(() => {
-        console.log("MongoDB connected successfully");
-        server.listen(PORT, () =>
-            console.log(`Server running on port ${PORT}`)
-        );
+        server.listen(PORT, () => {
+            // Server started
+        });
     })
-    .catch(console.error);
+    .catch((error) => {
+        console.error("MongoDB connection error:", error);
+        process.exit(1);
+    });

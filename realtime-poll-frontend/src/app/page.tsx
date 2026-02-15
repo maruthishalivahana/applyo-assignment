@@ -54,6 +54,12 @@ export default function HomePage() {
               type="text"
               value={quickQuestion}
               onChange={e => setQuickQuestion(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleQuickCreate();
+                }
+              }}
               placeholder="Type your question here..."
               className="flex-1 px-4 py-3 bg-transparent outline-none text-gray-800 placeholder:text-gray-400 font-medium"
             />

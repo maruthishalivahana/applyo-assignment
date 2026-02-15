@@ -17,6 +17,36 @@ export default function PollPage() {
     const [selectedOption, setSelectedOption] = useState<number | null>(null);
     const [isCopied, setIsCopied] = useState(false);
 
+    // Keyboard shortcuts
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            // Ignore if user is typing in an input
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+            // Number keys 1-9 to select options
+            if (e.key >= '1' && e.key <= '9') {
+                const optionIndex = parseInt(e.key) - 1;
+                if (poll && optionIndex < poll.options.length && !voted) {
+                    e.preventDefault();
+                    vote(optionIndex);
+                }
+            }
+            // Enter to vote on selected option
+            else if (e.key === 'Enter' && selectedOption !== null && !voted) {
+                e.preventDefault();
+                vote(selectedOption);
+            }
+            // 'S' or 'C' to share/copy link
+            else if ((e.key === 's' || e.key === 'S' || e.key === 'c' || e.key === 'C') && !e.ctrlKey && !e.metaKey) {
+                e.preventDefault();
+                handleShare();
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [poll, voted, selectedOption]);
+
     // --- Logic remains largely the same ---
     useEffect(() => {
         if (!id) return;
@@ -24,16 +54,12 @@ export default function PollPage() {
         // Fetch initial poll data
         const token = localStorage.getItem("voteToken");
         const clientId = getClientId();
-        console.log("Vote token from localStorage:", token);
-        console.log("ClientId from localStorage:", clientId);
         api.get(`/polls/${id}`, {
             headers: {
                 ...(token && { "x-vote-token": token }),
                 ...(clientId && { "x-client-id": clientId })
             }
         }).then(res => {
-            console.log("API Response:", res.data);
-            console.log("User voted option:", res.data.userVotedOption);
             setPoll(res.data.poll);
 
             // Check if user has already voted (by token OR clientId)
@@ -44,7 +70,6 @@ export default function PollPage() {
                 setVoted(true);
                 // Set the selected option if backend returned it
                 if (res.data.userVotedOption !== null && res.data.userVotedOption !== undefined) {
-                    console.log("Setting selected option to:", res.data.userVotedOption);
                     setSelectedOption(res.data.userVotedOption);
                 }
             }
@@ -57,7 +82,6 @@ export default function PollPage() {
 
         // Wait for connection before joining poll room
         const joinPollRoom = () => {
-            console.log("Joining poll room:", id);
             socket.emit("joinPoll", id);
         };
 
@@ -69,7 +93,6 @@ export default function PollPage() {
 
         // Define handler function with proper reference
         const handleVoteUpdate = (updatedPoll: any) => {
-            console.log("Received vote update:", updatedPoll);
             setPoll(updatedPoll);
         };
 
@@ -78,7 +101,6 @@ export default function PollPage() {
 
         // Cleanup function
         return () => {
-            console.log("Leaving poll room:", id);
             socket.off("voteUpdate", handleVoteUpdate);
             socket.off("connect", joinPollRoom);
             // Don't disconnect if other components might use it

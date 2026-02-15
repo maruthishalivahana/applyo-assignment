@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Plus, Trash2, BarChart3, AlignLeft, Share2, CheckCircle2 } from "lucide-react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
@@ -32,10 +32,11 @@ function CreatePollPage() {
     const [showModal, setShowModal] = useState(false);
     const [createdPollId, setCreatedPollId] = useState<string | null>(null);
     const [copied, setCopied] = useState(false);
+    const optionRefs = useRef<(HTMLInputElement | null)[]>([]);
 
     useEffect(() => {
-        if (initialQuestion && !question) setQuestion(initialQuestion);
-    }, [initialQuestion, question]);
+        if (initialQuestion) setQuestion(initialQuestion);
+    }, [initialQuestion]);
 
     // Create poll handler
     const handleCreatePoll = async () => {
@@ -91,6 +92,58 @@ function CreatePollPage() {
         }
     };
 
+    // Keyboard shortcuts for modal
+    useEffect(() => {
+        if (!showModal || !createdPollId) return;
+
+        const handleModalKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                setShowModal(false);
+            } else if (e.key === 'Enter') {
+                router.push(`/poll/${createdPollId}`);
+            } else if ((e.key === 'c' || e.key === 'C') && !e.ctrlKey && !e.metaKey) {
+                navigator.clipboard.writeText(getPollLink(createdPollId));
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+                toast.success("Link copied to clipboard!");
+            }
+        };
+
+        window.addEventListener('keydown', handleModalKeyDown);
+        return () => window.removeEventListener('keydown', handleModalKeyDown);
+    }, [showModal, createdPollId, router]);
+
+    // Handle Enter key in question field
+    const handleQuestionKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            optionRefs.current[0]?.focus();
+        } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+            handleCreatePoll();
+        }
+    };
+
+    // Handle Enter key in option fields
+    const handleOptionKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            if (index === options.length - 1) {
+                // Last option - add a new one and focus it
+                addOption();
+                setTimeout(() => {
+                    optionRefs.current[index + 1]?.focus();
+                }, 0);
+            } else {
+                // Move to next option
+                optionRefs.current[index + 1]?.focus();
+            }
+        } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+            handleCreatePoll();
+        }
+    };
+
     return (
         <main className="min-h-[calc(100vh-80px)] flex items-center justify-center p-6">
 
@@ -126,6 +179,7 @@ function CreatePollPage() {
                                 type="text"
                                 value={question}
                                 onChange={e => setQuestion(e.target.value)}
+                                onKeyDown={handleQuestionKeyDown}
                                 placeholder="e.g., What framework is best for 2025?"
                                 className="w-full pl-11 pr-4 py-4 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-green-500/20 focus:border-[#1a6b3a] transition-all outline-none text-gray-900 placeholder:text-gray-400 font-medium"
                             />
@@ -147,8 +201,10 @@ function CreatePollPage() {
                                         </div>
                                         <input
                                             type="text"
+                                            ref={el => { optionRefs.current[index] = el; }}
                                             value={option}
                                             onChange={(e) => handleOptionChange(index, e.target.value)}
+                                            onKeyDown={(e) => handleOptionKeyDown(index, e)}
                                             placeholder={`Option ${index + 1}`}
                                             className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500/20 focus:border-[#1a6b3a] transition-all outline-none text-gray-700"
                                         />
