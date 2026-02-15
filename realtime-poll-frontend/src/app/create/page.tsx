@@ -42,20 +42,42 @@ function CreatePollPage() {
     const handleCreatePoll = async () => {
         const trimmedQuestion = question.trim();
         const filteredOptions = options.map(o => o.trim()).filter(o => o);
+
         if (!trimmedQuestion) {
             toast.error("Please enter a poll question!");
             return;
         }
+
+        if (trimmedQuestion.length > 200) {
+            toast.error("Question must be less than 200 characters!");
+            return;
+        }
+
         if (filteredOptions.length < 2) {
             toast.error("Please enter at least two options!");
             return;
         }
+
+        // Check for option length limits
+        const longOption = filteredOptions.find(opt => opt.length > 100);
+        if (longOption) {
+            toast.error("Each option must be less than 100 characters!");
+            return;
+        }
+
+        // Check for duplicate options
+        const uniqueOptions = [...new Set(filteredOptions)];
+        if (uniqueOptions.length !== filteredOptions.length) {
+            toast.error("Duplicate options are not allowed!");
+            return;
+        }
+
         setLoading(true);
         const loadingToast = toast.loading("Creating your poll...");
         try {
             const res = await api.post("/polls", {
                 question: trimmedQuestion,
-                options: filteredOptions
+                options: uniqueOptions
             });
             const pollId = res.data.poll?._id || res.data.poll?.id;
             if (pollId) {
@@ -181,8 +203,12 @@ function CreatePollPage() {
                                 onChange={e => setQuestion(e.target.value)}
                                 onKeyDown={handleQuestionKeyDown}
                                 placeholder="e.g., What framework is best for 2025?"
+                                maxLength={200}
                                 className="w-full pl-11 pr-4 py-4 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-green-500/20 focus:border-[#1a6b3a] transition-all outline-none text-gray-900 placeholder:text-gray-400 font-medium"
                             />
+                        </div>
+                        <div className={`text-xs ${question.length > 180 ? 'text-red-500' : 'text-gray-500'} ml-1`}>
+                            {question.length}/200 characters
                         </div>
                     </div>
 
@@ -194,30 +220,38 @@ function CreatePollPage() {
 
                         <div className="space-y-3">
                             {options.map((option, index) => (
-                                <div key={index} className="flex gap-3 items-center group">
-                                    <div className="relative flex-1">
-                                        <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                                            <div className="h-2 w-2 rounded-full bg-gray-300 group-focus-within:bg-[#1a6b3a] transition-colors" />
+                                <div key={index} className="space-y-1">
+                                    <div className="flex gap-3 items-center group">
+                                        <div className="relative flex-1">
+                                            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                                                <div className="h-2 w-2 rounded-full bg-gray-300 group-focus-within:bg-[#1a6b3a] transition-colors" />
+                                            </div>
+                                            <input
+                                                type="text"
+                                                ref={el => { optionRefs.current[index] = el; }}
+                                                value={option}
+                                                onChange={(e) => handleOptionChange(index, e.target.value)}
+                                                onKeyDown={(e) => handleOptionKeyDown(index, e)}
+                                                placeholder={`Option ${index + 1}`}
+                                                maxLength={100}
+                                                className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500/20 focus:border-[#1a6b3a] transition-all outline-none text-gray-700"
+                                            />
                                         </div>
-                                        <input
-                                            type="text"
-                                            ref={el => { optionRefs.current[index] = el; }}
-                                            value={option}
-                                            onChange={(e) => handleOptionChange(index, e.target.value)}
-                                            onKeyDown={(e) => handleOptionKeyDown(index, e)}
-                                            placeholder={`Option ${index + 1}`}
-                                            className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500/20 focus:border-[#1a6b3a] transition-all outline-none text-gray-700"
-                                        />
-                                    </div>
 
-                                    {/* Delete Button (Only shows if more than 2 options) */}
-                                    {options.length > 2 && (
-                                        <button
-                                            onClick={() => removeOption(index)}
-                                            className="p-3 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all cursor-pointer"
-                                        >
-                                            <Trash2 className="w-5 h-5" />
-                                        </button>
+                                        {/* Delete Button (Only shows if more than 2 options) */}
+                                        {options.length > 2 && (
+                                            <button
+                                                onClick={() => removeOption(index)}
+                                                className="p-3 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all cursor-pointer"
+                                            >
+                                                <Trash2 className="w-5 h-5" />
+                                            </button>
+                                        )}
+                                    </div>
+                                    {option.length > 0 && (
+                                        <div className={`text-xs ${option.length > 90 ? 'text-red-500' : 'text-gray-500'} ml-1 pl-10`}>
+                                            {option.length}/100 characters
+                                        </div>
                                     )}
                                 </div>
                             ))}

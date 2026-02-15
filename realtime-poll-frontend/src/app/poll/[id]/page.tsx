@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, notFound } from "next/navigation";
 import { api } from "@/lib/api";
 import { socket } from "@/lib/socket";
 import { getClientId } from "@/lib/clientId";
@@ -16,6 +16,7 @@ export default function PollPage() {
     const [voted, setVoted] = useState(false);
     const [selectedOption, setSelectedOption] = useState<number | null>(null);
     const [isCopied, setIsCopied] = useState(false);
+    const [pollNotFound, setPollNotFound] = useState(false);
 
     // Keyboard shortcuts
     useEffect(() => {
@@ -72,6 +73,13 @@ export default function PollPage() {
                 if (res.data.userVotedOption !== null && res.data.userVotedOption !== undefined) {
                     setSelectedOption(res.data.userVotedOption);
                 }
+            }
+        }).catch(err => {
+            // Handle 404 - poll not found
+            if (err?.response?.status === 404) {
+                setPollNotFound(true);
+            } else {
+                toast.error("Failed to load poll");
             }
         });
 
@@ -158,6 +166,11 @@ export default function PollPage() {
         setIsCopied(true);
         setTimeout(() => setIsCopied(false), 2000);
     };
+
+    // --- Poll Not Found ---
+    if (pollNotFound) {
+        notFound();
+    }
 
     // --- Loading State ---
     if (!poll) return (

@@ -11,19 +11,63 @@ export const createPoll = async (req: Request, res: Response) => {
     try {
         // request body data
         const { question, options } = req.body;
-        // create poll document
+
+        // Validate question and options exist
         if (!question || !options || options.length < 2) {
             return res.status(400).json({
                 success: false,
                 message: "Question and at least 2 options are required"
             })
         }
-        const poll = await Poll.create({
-            question,
-            options: options.map((text: string) => ({ text, votes: 0 })),
-            // votedIPs: []
 
-        })
+        // Validate question length
+        if (question.trim().length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Question cannot be empty"
+            })
+        }
+
+        if (question.length > 200) {
+            return res.status(400).json({
+                success: false,
+                message: "Question must be less than 200 characters"
+            })
+        }
+
+        // Validate options
+        const trimmedOptions: string[] = options.map((opt: string) => opt.trim()).filter((opt: string) => opt.length > 0);
+
+        if (trimmedOptions.length < 2) {
+            return res.status(400).json({
+                success: false,
+                message: "At least 2 non-empty options are required"
+            })
+        }
+
+        // Check for option length limits
+        for (const option of trimmedOptions) {
+            if (option.length > 100) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Each option must be less than 100 characters"
+                })
+            }
+        }
+
+        // Check for duplicate options
+        const uniqueOptions: string[] = [...new Set(trimmedOptions)];
+        if (uniqueOptions.length !== trimmedOptions.length) {
+            return res.status(400).json({
+                success: false,
+                message: "Duplicate options are not allowed"
+            })
+        }
+
+        const poll = await Poll.create({
+            question: question.trim(),
+            options: uniqueOptions.map((text) => ({ text, votes: 0 }))
+        });
         res.status(201).json({
             success: true,
             message: "Poll created successfully",
@@ -163,4 +207,3 @@ export const votePoll = async (req: Request, res: Response) => {
         });
     }
 };
-
