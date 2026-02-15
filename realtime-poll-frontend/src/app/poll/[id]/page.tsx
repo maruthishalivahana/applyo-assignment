@@ -24,7 +24,10 @@ export default function PollPage() {
         socket.emit("joinPoll", id);
         socket.on("voteUpdate", (updatedPoll: any) => setPoll(updatedPoll));
 
-        return () => { socket.disconnect(); };
+        return () => {
+            socket.off("voteUpdate");
+            socket.disconnect();
+        };
     }, [id]);
 
     const vote = async (index: number) => {
