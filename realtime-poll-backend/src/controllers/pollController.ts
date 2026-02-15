@@ -87,12 +87,12 @@ export const votePoll = async (req: Request, res: Response) => {
         }
 
         // fairness 1: IP method
-        if (poll.votedIPs.includes(ip)) {
-            return res.status(403).json({
-                success: false,
-                message: "Already voted (IP)"
-            });
-        }
+        // if (poll.votedIPs.includes(ip)) {
+        //     return res.status(403).json({
+        //         success: false,
+        //         message: "Already voted (IP)"
+        //     });
+        // }
 
         //  fairness 2: Token method
         if (voteToken && poll.votedTokens.includes(voteToken)) {
@@ -104,7 +104,7 @@ export const votePoll = async (req: Request, res: Response) => {
 
         //  vote
         poll.options[optionIndex].votes += 1;
-        poll.votedIPs.push(ip);
+        // poll.votedIPs.push(ip);
 
         // generate token
         const newToken = crypto.randomBytes(16).toString("hex");
