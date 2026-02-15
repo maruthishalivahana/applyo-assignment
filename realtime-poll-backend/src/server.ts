@@ -22,7 +22,13 @@ io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
 
     socket.on("joinPoll", (pollId: string) => {
+        console.log(`Socket ${socket.id} joining poll room: ${pollId}`);
         socket.join(pollId);
+        console.log(`Socket ${socket.id} joined poll room: ${pollId}`);
+    });
+
+    socket.on("disconnect", () => {
+        console.log("User disconnected:", socket.id);
     });
 });
 

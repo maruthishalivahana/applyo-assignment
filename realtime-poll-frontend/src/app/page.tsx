@@ -59,7 +59,7 @@ export default function HomePage() {
             />
             <button
               onClick={handleQuickCreate}
-              className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition-all shadow-lg shadow-indigo-200 flex items-center justify-center gap-2 group"
+              className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition-all shadow-lg shadow-indigo-200 flex items-center justify-center gap-2 group cursor-pointer"
             >
               Create Poll
               <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />

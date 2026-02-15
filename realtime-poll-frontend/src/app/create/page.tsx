@@ -155,7 +155,7 @@ function CreatePollPage() {
                                     {options.length > 2 && (
                                         <button
                                             onClick={() => removeOption(index)}
-                                            className="p-3 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+                                            className="p-3 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all cursor-pointer"
                                         >
                                             <Trash2 className="w-5 h-5" />
                                         </button>
@@ -167,7 +167,7 @@ function CreatePollPage() {
                         {/* Add Option Button */}
                         <button
                             onClick={addOption}
-                            className="mt-2 flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:text-indigo-700 px-2 py-1 rounded-lg hover:bg-indigo-50 transition-colors"
+                            className="mt-2 flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:text-indigo-700 px-2 py-1 rounded-lg hover:bg-indigo-50 transition-colors cursor-pointer"
                         >
                             <Plus className="w-4 h-4" />
                             Add another option
@@ -176,13 +176,13 @@ function CreatePollPage() {
 
                     {/* Action Buttons */}
                     <div className="pt-4 flex items-center justify-end gap-4">
-                        <button className="px-6 py-3 text-sm font-semibold text-gray-600 hover:text-gray-900 transition-colors">
+                        <button className="px-6 py-3 text-sm font-semibold text-gray-600 hover:text-gray-900 transition-colors cursor-pointer">
                             Cancel
                         </button>
                         <button
                             onClick={handleCreatePoll}
                             disabled={loading}
-                            className="px-8 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-semibold rounded-xl hover:shadow-lg hover:shadow-indigo-500/30 hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
+                            className="px-8 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-semibold rounded-xl hover:shadow-lg hover:shadow-indigo-500/30 hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
                         >
                             {loading ? "Creating..." : "Create Poll"}
                         </button>
@@ -192,7 +192,7 @@ function CreatePollPage() {
                             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
                                 <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full relative flex flex-col items-center">
                                     <button
-                                        className="absolute top-3 right-3 text-gray-400 hover:text-gray-600 text-xl font-bold"
+                                        className="absolute top-3 right-3 text-gray-400 hover:text-gray-600 text-xl font-bold cursor-pointer"
                                         onClick={() => setShowModal(false)}
                                         aria-label="Close"
                                     >
@@ -213,7 +213,7 @@ function CreatePollPage() {
                                                 setCopied(true);
                                                 setTimeout(() => setCopied(false), 1500);
                                             }}
-                                            className="flex items-center gap-1 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold transition-colors"
+                                            className="flex items-center gap-1 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
                                         >
                                             {copied ? <CheckCircle2 className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
                                             {copied ? "Copied!" : "Copy Link"}
@@ -221,7 +221,7 @@ function CreatePollPage() {
                                     </div>
                                     <button
                                         onClick={() => router.push(`/poll/${createdPollId}`)}
-                                        className="w-full mt-2 px-4 py-2 bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-semibold rounded-xl hover:shadow-lg hover:shadow-indigo-500/30 transition-all duration-200"
+                                        className="w-full mt-2 px-4 py-2 bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-semibold rounded-xl hover:shadow-lg hover:shadow-indigo-500/30 transition-all duration-200 cursor-pointer"
                                     >
                                         Go to Poll
                                     </button>

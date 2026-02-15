@@ -113,7 +113,9 @@ export const votePoll = async (req: Request, res: Response) => {
         await poll.save();
 
         const io = req.app.get("io") as Server;
+        console.log(`Emitting voteUpdate to room: ${poll._id.toString()}`);
         io.to(poll._id.toString()).emit("voteUpdate", poll);
+        console.log(`Vote update emitted for poll: ${poll._id.toString()}`);
 
         return res.status(200).json({
             success: true,
