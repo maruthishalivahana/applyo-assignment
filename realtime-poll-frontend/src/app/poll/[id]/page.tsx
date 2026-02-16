@@ -5,12 +5,14 @@ import { useParams, notFound } from "next/navigation";
 import { api } from "@/lib/api";
 import { socket } from "@/lib/socket";
 import { getClientId } from "@/lib/clientId";
-import { Share2, CheckCircle2, Loader2, BarChart2 } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import { Share2, CheckCircle2, Loader2, BarChart2, LogIn, AlertCircle } from "lucide-react";
 import toast from "react-hot-toast";
 
 export default function PollPage() {
     const params = useParams();
     const id = typeof params.id === "string" ? params.id : Array.isArray(params.id) ? params.id[0] : undefined;
+    const { user, signInWithGoogle, getIdToken, loading: authLoading } = useAuth();
 
     const [poll, setPoll] = useState<any>(null);
     const [voted, setVoted] = useState(false);
@@ -27,13 +29,13 @@ export default function PollPage() {
             // Number keys 1-9 to select options
             if (e.key >= '1' && e.key <= '9') {
                 const optionIndex = parseInt(e.key) - 1;
-                if (poll && optionIndex < poll.options.length && !voted) {
+                if (poll && optionIndex < poll.options.length && !voted && user) {
                     e.preventDefault();
                     vote(optionIndex);
                 }
             }
             // Enter to vote on selected option
-            else if (e.key === 'Enter' && selectedOption !== null && !voted) {
+            else if (e.key === 'Enter' && selectedOption !== null && !voted && user) {
                 e.preventDefault();
                 vote(selectedOption);
             }
@@ -46,44 +48,51 @@ export default function PollPage() {
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [poll, voted, selectedOption]);
+    }, [poll, voted, selectedOption, user]);
 
-    // --- Logic remains largely the same ---
+    // Fetch poll data
     useEffect(() => {
         if (!id) return;
 
-        // Fetch initial poll data
-        const token = localStorage.getItem("voteToken");
-        const clientId = getClientId();
-        api.get(`/polls/${id}`, {
-            headers: {
-                ...(token && { "x-vote-token": token }),
-                ...(clientId && { "x-client-id": clientId })
-            }
-        }).then(res => {
-            setPoll(res.data.poll);
+        const fetchPoll = async () => {
+            try {
+                const token = await getIdToken();
+                const voteToken = localStorage.getItem("voteToken");
+                const clientId = getClientId();
 
-            // Backend now checks IP, token, and clientId - trust its userVotedOption response
-            if (res.data.userVotedOption !== null && res.data.userVotedOption !== undefined) {
-                setVoted(true);
-                setSelectedOption(res.data.userVotedOption);
+                const res = await api.get(`/polls/${id}`, {
+                    headers: {
+                        ...(token && { Authorization: `Bearer ${token}` }),
+                        ...(voteToken && { "x-vote-token": voteToken }),
+                        ...(clientId && { "x-client-id": clientId })
+                    }
+                });
+
+                setPoll(res.data.poll);
+
+                // Check if user has voted
+                if (res.data.userVotedOption !== null && res.data.userVotedOption !== undefined) {
+                    setVoted(true);
+                    setSelectedOption(res.data.userVotedOption);
+                }
+            } catch (err: any) {
+                if (err?.response?.status === 404) {
+                    setPollNotFound(true);
+                } else {
+                    toast.error("Failed to load poll");
+                }
             }
-        }).catch(err => {
-            // Handle 404 - poll not found
-            if (err?.response?.status === 404) {
-                setPollNotFound(true);
-            } else {
-                toast.error("Failed to load poll");
-            }
-        });
+        };
+
+        fetchPoll();
 
         // Connect socket and join room
         if (!socket.connected) {
             socket.connect();
         }
 
-        // Wait for connection before joining poll room
         const joinPollRoom = () => {
+            console.log(`🎯 Joining poll room: ${id}`);
             socket.emit("joinPoll", id);
         };
 
@@ -93,24 +102,26 @@ export default function PollPage() {
             socket.once("connect", joinPollRoom);
         }
 
-        // Define handler function with proper reference
+        // Listen for vote updates
         const handleVoteUpdate = (updatedPoll: any) => {
+            console.log("📊 Received vote update:", updatedPoll);
             setPoll(updatedPoll);
         };
 
-        // Listen for vote updates
         socket.on("voteUpdate", handleVoteUpdate);
 
-        // Cleanup function
         return () => {
             socket.off("voteUpdate", handleVoteUpdate);
             socket.off("connect", joinPollRoom);
-            // Don't disconnect if other components might use it
-            // socket.disconnect();
         };
-    }, [id]);
+    }, [id, user]);
 
     const vote = async (index: number) => {
+        if (!user) {
+            toast.error("Please sign in with Google to vote");
+            return;
+        }
+
         if (voted || !id) {
             if (voted) {
                 toast.error("You've already voted on this poll!");
@@ -118,41 +129,51 @@ export default function PollPage() {
             return;
         }
 
-        // Optimistic UI update for immediate feedback
+        // Optimistic UI update
         setSelectedOption(index);
         const loadingToast = toast.loading("Recording your vote...");
 
-        const token = localStorage.getItem("voteToken");
-        const clientId = getClientId();
-
         try {
+            const token = await getIdToken();
+
+            if (!token) {
+                toast.error("Authentication error. Please sign in again.", { id: loadingToast });
+                return;
+            }
+
+            const voteToken = localStorage.getItem("voteToken");
+            const clientId = getClientId();
+
             const res = await api.post(
                 `/polls/${id}/vote`,
                 { optionIndex: index },
                 {
                     headers: {
-                        ...(token && { "x-vote-token": token }),
+                        Authorization: `Bearer ${token}`,
+                        ...(voteToken && { "x-vote-token": voteToken }),
                         ...(clientId && { "x-client-id": clientId })
                     }
                 }
             );
+
+            // Store the returned vote token for future requests
             if (res.data.voteToken) {
                 localStorage.setItem("voteToken", res.data.voteToken);
             }
+
             setVoted(true);
             setSelectedOption(index);
             toast.success("Vote recorded successfully!", { id: loadingToast });
         } catch (err: any) {
             const errorMsg = err?.response?.data?.message || err.message;
-            if (errorMsg.includes("Already voted")) {
-                // Show appropriate message based on the type of block
-                if (errorMsg.includes("network")) {
-                    toast.error("Already voted from this network!", { id: loadingToast });
-                } else {
-                    toast.error("You've already voted on this poll!", { id: loadingToast });
-                }
+
+            if (err?.response?.status === 401) {
+                toast.error("Please sign in to vote", { id: loadingToast });
+            } else if (errorMsg.includes("already voted") || err?.response?.data?.alreadyVoted) {
+                toast.error("You've already voted on this poll!", { id: loadingToast });
+                setVoted(true);
             } else {
-                toast.error("Voting failed: " + errorMsg, { id: loadingToast });
+                toast.error("Failed to record vote: " + errorMsg, { id: loadingToast });
             }
             setSelectedOption(null); // Revert on failure
         }
@@ -166,13 +187,13 @@ export default function PollPage() {
         setTimeout(() => setIsCopied(false), 2000);
     };
 
-    // --- Poll Not Found ---
+    // Poll Not Found
     if (pollNotFound) {
         notFound();
     }
 
-    // --- Loading State ---
-    if (!poll) return (
+    // Loading State
+    if (!poll || authLoading) return (
         <div className="min-h-[60vh] flex items-center justify-center">
             <Loader2 className="w-8 h-8 text-[#1a6b3a] animate-spin" />
         </div>
@@ -185,6 +206,28 @@ export default function PollPage() {
     return (
         <main className="min-h-[calc(100vh-80px)] flex items-center justify-center p-6">
             <div className="w-full max-w-xl">
+
+                {/* Authentication Notice */}
+                {!user && (
+                    <div className="mb-6 bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3">
+                        <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                        <div className="flex-1">
+                            <p className="text-sm font-semibold text-amber-900 mb-1">
+                                Sign in Required to Vote
+                            </p>
+                            <p className="text-sm text-amber-700 mb-3">
+                                You need to sign in with your Google account to vote on this poll.
+                            </p>
+                            <button
+                                onClick={signInWithGoogle}
+                                className="flex items-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-all font-medium text-sm shadow-sm"
+                            >
+                                <LogIn size={16} />
+                                Sign in with Google
+                            </button>
+                        </div>
+                    </div>
+                )}
 
                 {/* Card Container */}
                 <div className="bg-white rounded-3xl shadow-xl shadow-green-100/50 border border-slate-100 overflow-hidden">
@@ -214,18 +257,20 @@ export default function PollPage() {
                         {poll.options.map((opt: any, i: number) => {
                             const percent = totalVotes === 0 ? 0 : Math.round((opt.votes / totalVotes) * 100);
                             const isSelected = selectedOption === i;
+                            const canVote = user && !voted;
 
                             return (
                                 <div key={i} className="space-y-2">
                                     <button
-                                        disabled={voted}
-                                        onClick={() => vote(i)}
+                                        disabled={!canVote}
+                                        onClick={() => canVote && vote(i)}
                                         className={`relative w-full text-left group transition-all duration-300 outline-none rounded-xl
-                    ${voted ? 'cursor-default' : 'hover:scale-[1.01] hover:shadow-md cursor-pointer'}
+                    ${canVote ? 'hover:scale-[1.01] hover:shadow-md cursor-pointer' : 'cursor-default'}
                     ${voted && isSelected ? 'ring-2 ring-[#1a6b3a] scale-[1.02]' : ''}
+                    ${!user ? 'opacity-60' : ''}
                   `}
                                     >
-                                        {/* Background Progress Bar (Only visible after voting) */}
+                                        {/* Background Progress Bar */}
                                         <div className="absolute inset-0 bg-slate-50 rounded-xl overflow-hidden border border-slate-200">
                                             <div
                                                 className={`h-full transition-all duration-1000 ease-out ${isSelected && voted ? 'bg-gradient-to-r from-green-500/20 to-green-600/20' : 'bg-slate-200/50'
@@ -238,11 +283,13 @@ export default function PollPage() {
                                         <div className={`relative p-4 flex items-center gap-3 z-10 rounded-xl border transition-all
                      ${voted
                                                 ? 'border-transparent'
-                                                : 'bg-white border-slate-200 hover:border-green-300 hover:ring-4 hover:ring-green-50'
+                                                : canVote
+                                                    ? 'bg-white border-slate-200 hover:border-green-300 hover:ring-4 hover:ring-green-50'
+                                                    : 'bg-white border-slate-200'
                                             }
                      ${voted && isSelected ? 'bg-white/80' : ''}
                   `}>
-                                            {/* Checkbox Circle UI */}
+                                            {/* Checkbox Circle */}
                                             <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors flex-shrink-0
                           ${isSelected && voted
                                                     ? 'border-[#1a6b3a] bg-[#1a6b3a] text-white'
@@ -258,7 +305,7 @@ export default function PollPage() {
                                                 {opt.text}
                                             </span>
 
-                                            {/* Show "Your vote" badge if selected and voted */}
+                                            {/* "Your vote" badge */}
                                             {voted && isSelected && (
                                                 <span className="px-2.5 py-1 bg-green-100 text-green-700 text-xs font-bold rounded-full">
                                                     Your Vote
@@ -267,7 +314,7 @@ export default function PollPage() {
                                         </div>
                                     </button>
 
-                                    {/* Vote count and Percentage below option */}
+                                    {/* Vote count and Percentage */}
                                     {voted && (
                                         <div className="pl-9 flex items-center justify-between gap-3 text-sm">
                                             <span className={`font-bold ${isSelected ? 'text-[#1a6b3a]' : 'text-slate-600'}`}>

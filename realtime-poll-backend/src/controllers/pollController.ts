@@ -1,51 +1,25 @@
-import { Request, Response } from "express";
+import { Response } from "express";
 import { Server } from "socket.io";
-import mongoose from "mongoose";
 import Poll, { IPoll } from "../models/poll";
+import Vote from "../models/vote";
+import { AuthRequest } from "../middleware/auth";
 import crypto from "crypto";
 
 /**
- * Multi-layered vote fairness system:
- * 1. IP Address (Primary) - Prevents voting from same network across different browsers
- * 2. Vote Token (Secondary) - Persists vote status in localStorage
- * 3. Client ID (Tertiary) - Browser fingerprint for additional tracking
+ * MULTI-LAYERED FAIRNESS SYSTEM
+ * ==============================
+ * 1. PRIMARY: Google OAuth (userId) - Most secure, cross-device
+ * 2. SECONDARY: Vote Token (localStorage) - Persists across sessions
+ * 3. TERTIARY: Client ID (browser fingerprint) - Additional tracking
+ * 
+ * Google Auth is required for voting, but token/clientId provide
+ * additional protection against duplicate votes
  */
-
 /**
- * Extract client IP address from request headers
- * Handles proxy headers from deployment platforms like Render, Heroku, etc.
+ * Create a new poll
+ * Note: Poll creation doesn't require authentication, but it's recommended
  */
-function getClientIP(req: Request): string {
-    // Try x-forwarded-for first (most common for proxies)
-    const forwarded = req.headers['x-forwarded-for'];
-    if (forwarded) {
-        const ip = (typeof forwarded === 'string' ? forwarded : forwarded[0]).split(',')[0].trim();
-        if (ip && ip !== '::1' && ip !== '127.0.0.1') {
-            return ip;
-        }
-    }
-
-    // Try x-real-ip header
-    const realIp = req.headers['x-real-ip'];
-    if (realIp && typeof realIp === 'string') {
-        if (realIp !== '::1' && realIp !== '127.0.0.1') {
-            return realIp;
-        }
-    }
-
-    // Fall back to socket address
-    const socketIp = req.socket.remoteAddress || '';
-    if (socketIp && socketIp !== '::1' && socketIp !== '127.0.0.1') {
-        return socketIp;
-    }
-
-    // In development, return localhost identifier
-    return 'localhost';
-}
-
-
-
-export const createPoll = async (req: Request, res: Response) => {
+export const createPoll = async (req: AuthRequest, res: Response) => {
 
     try {
         // request body data
@@ -105,7 +79,8 @@ export const createPoll = async (req: Request, res: Response) => {
 
         const poll = await Poll.create({
             question: question.trim(),
-            options: uniqueOptions.map((text) => ({ text, votes: 0 }))
+            options: uniqueOptions.map((text) => ({ text, votes: 0 })),
+            createdBy: req.user?.uid  // Store creator if authenticated
         });
         res.status(201).json({
             success: true,
@@ -123,8 +98,11 @@ export const createPoll = async (req: Request, res: Response) => {
     }
 }
 
-
-export const getPoll = async (req: Request, res: Response) => {
+/**
+ * Get poll details
+ * Checks all 3 fairness layers to determine if user voted
+ */
+export const getPoll = async (req: AuthRequest, res: Response) => {
     try {
         const poll = await Poll.findById(req.params.id)
         if (!poll) {
@@ -134,31 +112,46 @@ export const getPoll = async (req: Request, res: Response) => {
             })
         }
 
-        // Check if user has already voted and get their choice
-        const voteToken = req.headers["x-vote-token"] as string | undefined;
-        const clientId = req.headers["x-client-id"] as string | undefined;
-
-        // Get client IP address
-        const clientIP = getClientIP(req);
-
         let userVotedOption: number | null = null;
 
-        // Check IP first (primary method), then token, then clientId
-        if (clientIP && poll.tokenVotes) {
-            userVotedOption = poll.tokenVotes.get(clientIP) ?? null;
+        // LAYER 1 (PRIMARY): Check Google OAuth userId
+        if (req.user?.uid) {
+            const existingVote = await Vote.findOne({
+                pollId: poll._id.toString(),
+                userId: req.user.uid
+            });
+
+            if (existingVote) {
+                // Find which option index they voted for
+                const optionIndex = poll.options.findIndex(
+                    opt => opt.text === existingVote.optionId
+                );
+                userVotedOption = optionIndex >= 0 ? optionIndex : null;
+            }
         }
-        if (userVotedOption === null && voteToken && poll.tokenVotes) {
-            userVotedOption = poll.tokenVotes.get(voteToken) ?? null;
+
+        // LAYER 2 (SECONDARY): Check vote token (fallback)
+        if (userVotedOption === null) {
+            const voteToken = req.headers["x-vote-token"] as string | undefined;
+            if (voteToken && poll.tokenVotes) {
+                userVotedOption = poll.tokenVotes.get(voteToken) ?? null;
+            }
         }
-        if (userVotedOption === null && clientId && poll.tokenVotes) {
-            userVotedOption = poll.tokenVotes.get(clientId) ?? null;
+
+        // LAYER 3 (TERTIARY): Check client ID (fallback)
+        if (userVotedOption === null) {
+            const clientId = req.headers["x-client-id"] as string | undefined;
+            if (clientId && poll.tokenVotes) {
+                userVotedOption = poll.tokenVotes.get(clientId) ?? null;
+            }
         }
 
         res.status(200).json({
             success: true,
             message: "Poll retrieved successfully",
             poll,
-            userVotedOption
+            userVotedOption,
+            isAuthenticated: !!req.user
         })
 
     } catch (error) {
@@ -169,16 +162,26 @@ export const getPoll = async (req: Request, res: Response) => {
         })
     }
 }
-export const votePoll = async (req: Request, res: Response) => {
+/**
+ * Vote on a poll
+ * REQUIRES AUTHENTICATION + Multi-layered fairness checks
+ * 1. Google OAuth (PRIMARY) - Required
+ * 2. Vote Token (SECONDARY) - Additional check
+ * 3. Client ID (TERTIARY) - Additional check
+ */
+export const votePoll = async (req: AuthRequest, res: Response) => {
     try {
         const { optionIndex } = req.body;
-
         const voteToken = req.headers["x-vote-token"] as string | undefined;
         const clientId = req.headers["x-client-id"] as string | undefined;
 
-        // Get client IP address (primary fairness mechanism)
-        const clientIP = getClientIP(req);
-        console.log('Vote attempt from IP:', clientIP);
+        // LAYER 1: Authentication is required
+        if (!req.user?.uid) {
+            return res.status(401).json({
+                success: false,
+                message: "Authentication required. Please log in with Google to vote."
+            });
+        }
 
         const poll = await Poll.findById(req.params.id);
         if (!poll) {
@@ -188,11 +191,6 @@ export const votePoll = async (req: Request, res: Response) => {
             });
         }
 
-        // Initialize votedIPs if it doesn't exist (for backward compatibility with old polls)
-        if (!poll.votedIPs) {
-            poll.votedIPs = [];
-        }
-
         if (optionIndex < 0 || optionIndex >= poll.options.length) {
             return res.status(400).json({
                 success: false,
@@ -200,33 +198,48 @@ export const votePoll = async (req: Request, res: Response) => {
             });
         }
 
-        // PRIMARY FAIRNESS CHECK: IP-based
-        if (clientIP && clientIP !== 'localhost' && poll.votedIPs.includes(clientIP)) {
-            console.log('Duplicate vote blocked for IP:', clientIP);
+        // LAYER 1 (PRIMARY): Check Google OAuth userId
+        const existingVote = await Vote.findOne({
+            pollId: poll._id.toString(),
+            userId: req.user.uid
+        });
+
+        if (existingVote) {
             return res.status(403).json({
                 success: false,
-                message: "Already voted from this network"
+                message: "You have already voted on this poll (Google Account)",
+                alreadyVoted: true
             });
         }
 
-        // Fairness 1: Token method (secondary check)
+        // LAYER 2 (SECONDARY): Check vote token
         if (voteToken && poll.votedTokens.includes(voteToken)) {
             return res.status(403).json({
                 success: false,
-                message: "Already voted (Token)"
+                message: "You have already voted on this poll (Token)",
+                alreadyVoted: true
             });
         }
 
-        // Fairness 2: Client ID method
+        // LAYER 3 (TERTIARY): Check client ID
         if (clientId && poll.votedClients.includes(clientId)) {
             return res.status(403).json({
                 success: false,
-                message: "Already voted (Client)"
+                message: "You have already voted on this poll (Client ID)",
+                alreadyVoted: true
             });
         }
 
-        // Record vote
-        poll.options[optionIndex].votes += 1;
+        // Record the vote in Vote collection
+        const selectedOption = poll.options[optionIndex].text;
+
+        await Vote.create({
+            pollId: poll._id.toString(),
+            userId: req.user.uid,
+            optionId: selectedOption,
+            userEmail: req.user.email,
+            votedAt: new Date()
+        });
 
         // Generate and store token
         const newToken = crypto.randomBytes(16).toString("hex");
@@ -237,30 +250,27 @@ export const votePoll = async (req: Request, res: Response) => {
             poll.votedClients.push(clientId);
         }
 
-        // Store IP address (primary fairness mechanism)
-        // Don't store localhost to allow development testing
-        if (clientIP && clientIP !== 'localhost') {
-            poll.votedIPs.push(clientIP);
-        }
-
         // Store which option was selected (for "Your Vote" badge persistence)
         if (!poll.tokenVotes) {
             poll.tokenVotes = new Map();
         }
-        // Store mappings for token, clientId, and IP
         poll.tokenVotes.set(newToken, optionIndex);
         if (clientId) {
             poll.tokenVotes.set(clientId, optionIndex);
         }
-        if (clientIP && clientIP !== 'localhost') {
-            poll.tokenVotes.set(clientIP, optionIndex);
-        }
 
+        // Increment vote count on the poll
+        poll.options[optionIndex].votes += 1;
         await poll.save();
 
+        // Emit real-time update via Socket.IO
         const io = req.app.get("io") as Server;
+        const pollId = poll._id.toString();
+        console.log(`Emitting voteUpdate to room: ${pollId}`);
+
         try {
-            io.to(poll._id.toString()).emit("voteUpdate", poll);
+            const emitResult = io.to(pollId).emit("voteUpdate", poll);
+            console.log(`Vote update emitted successfully. Room: ${pollId}, Clients in room: ${io.sockets.adapter.rooms.get(pollId)?.size || 0}`);
         } catch (socketError) {
             console.error("Failed to emit vote update via socket:", socketError);
         }
@@ -274,9 +284,10 @@ export const votePoll = async (req: Request, res: Response) => {
 
     } catch (error) {
         console.error("Vote error:", error);
+
         return res.status(500).json({
             success: false,
-            message: "Failed to vote",
+            message: "Failed to record vote",
             error: error instanceof Error ? error.message : "Unknown error"
         });
     }

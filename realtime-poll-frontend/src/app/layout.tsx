@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Poppins } from "next/font/google"; //  Poppins font family from Google Fonts
 import { Toaster } from "react-hot-toast";
+import { AuthProvider } from "@/contexts/AuthContext";
+import NavbarAuth from "@/components/NavbarAuth";
 import "./globals.css";
 
 // 2. Configure Poppins
@@ -28,26 +30,27 @@ export default function RootLayout({
         // This instantly sets the font-family for the whole app.
         className={`${poppins.className} antialiased bg-[#f0e8d0] text-slate-900 selection:bg-green-100 selection:text-green-800`}
       >
-        <Toaster
-          position="top-center"
-          reverseOrder={false}
-          toastOptions={{
-            duration: 3000,
-            style: {
-              background: '#fff',
-              color: '#1e293b',
-              boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
-              border: '1px solid #e2e8f0',
-              padding: '16px',
-              borderRadius: '12px',
-              fontSize: '14px',
-              fontWeight: '500',
-            },
-            success: {
-              iconTheme: {
-                primary: '#1a6b3a',
-                secondary: '#fff',
+        <AuthProvider>
+          <Toaster
+            position="top-center"
+            reverseOrder={false}
+            toastOptions={{
+              duration: 3000,
+              style: {
+                background: '#fff',
+                color: '#1e293b',
+                boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
+                border: '1px solid #e2e8f0',
+                padding: '16px',
+                borderRadius: '12px',
+                fontSize: '14px',
+                fontWeight: '500',
               },
+              success: {
+                iconTheme: {
+                  primary: '#1a6b3a',
+                  secondary: '#fff',
+                },
             },
             error: {
               iconTheme: {
@@ -68,6 +71,7 @@ export default function RootLayout({
         <div className="relative">
           {children}
         </div>
+        </AuthProvider>
       </body>
     </html>
   );
@@ -82,9 +86,12 @@ function Navbar() {
           Pollify
         </h1>
 
-        <div className="space-x-6 text-sm font-medium text-slate-600">
-          <a href="/" className="hover:text-[#1a6b3a] transition-colors">Home</a>
-          <a href="/create" className="hover:text-[#1a6b3a] transition-colors">Create Poll</a>
+        <div className="flex items-center gap-6">
+          <div className="space-x-6 text-sm font-medium text-slate-600">
+            <a href="/" className="hover:text-[#1a6b3a] transition-colors">Home</a>
+            <a href="/create" className="hover:text-[#1a6b3a] transition-colors">Create Poll</a>
+          </div>
+          <NavbarAuth />
         </div>
       </div>
     </nav>

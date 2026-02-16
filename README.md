@@ -138,6 +138,7 @@ I implemented two types of communication:
 | **MongoDB** | Database | Flexible schema and document-based model suits poll structure |
 | **Mongoose** | ODM | Schema validation, middleware, and query builder |
 | **Socket.IO** | Real-time engine | Abstracts WebSocket complexity with automatic reconnection |
+| **Firebase Admin SDK** | Authentication | Verifies Google OAuth tokens server-side securely |
 | **CORS** | Cross-origin support | Enables frontend-backend communication across domains |
 
 #### Frontend
@@ -150,6 +151,7 @@ I implemented two types of communication:
 | **react-hot-toast** | Notifications | Lightweight and customizable toast notifications |
 | **Socket.IO Client** | Real-time client | Pairs perfectly with my backend Socket.IO server |
 | **Axios** | HTTP client | Promise-based with interceptors and clean API |
+| **Firebase Client SDK** | Authentication | Google OAuth login with seamless token management |
 
 #### Development Tools
 
@@ -165,16 +167,22 @@ I implemented two types of communication:
 
 ```
 realtime-poll-backend/
+├── config/
+│   └── firebaseAdmin.ts       # Firebase Admin SDK initialization
 ├── src/
 │   ├── server.ts              # Entry point, Socket.IO setup
+│   ├── middleware/
+│   │   └── auth.ts            # Authentication middleware
 │   ├── models/
-│   │   └── poll.ts            # Poll schema and model
+│   │   ├── poll.ts            # Poll schema and model
+│   │   └── vote.ts            # Vote tracking schema
 │   ├── controllers/
 │   │   └── pollController.ts  # Business logic
 │   └── routes/
 │       └── pollRoutes.ts      # API route definitions
 ├── package.json
 ├── tsconfig.json
+├── serviceAccountKey.json     # Firebase credentials (gitignored)
 └── .env
 ```
 
@@ -184,8 +192,8 @@ realtime-poll-backend/
 interface IPoll {
     question: string;                    // The poll question
     options: IOption[];                  // Array of answer options
-    votedTokens: string[];               // Vote tokens that have voted
-    votedClients: string[];              // Client IDs that have voted
+    votedTokens: string[];               // Vote tokens that have voted (secondary layer)
+    votedClients: string[];              // Client IDs that have voted (tertiary layer)
     tokenVotes: Map<string, number>;     // Maps token/clientId to vote choice
     timestamps: true;                    // createdAt, updatedAt
 }
@@ -194,17 +202,27 @@ interface IOption {
     text: string;                        // Option display text
     votes: number;                       // Vote count
 }
+
+interface IVote {
+    pollId: string;                      // Reference to poll
+    userId: string;                      // Firebase Auth UID (primary fairness layer)
+    optionId: string;                    // Selected option ID
+    userEmail?: string;                  // User's email (optional)
+    votedAt: Date;                       // Timestamp
+}
 ```
 
 **My Design Decisions:**
 
-1. **Options as Embedded Documents**: I stored options within the poll document rather than in a separate collection for simplicity and atomic updates
+1. **Separate Vote Collection**: I created a dedicated Vote model to track authenticated user votes independently, enforcing one vote per Google account per poll
 
-2. **Dual Fairness Arrays**: I included both `votedTokens` and `votedClients` arrays to enable checking against two independent mechanisms
+2. **Options as Embedded Documents**: I stored options within the poll document rather than in a separate collection for simplicity and atomic updates
 
-3. **Vote Mapping with Map**: I used the `tokenVotes` Map to store which option each token/clientId voted for, enabling the "Your Vote" badge to persist across page refreshes
+3. **Triple-Layer Fairness**: I included Google OAuth userId (Vote collection), votedTokens, and votedClients arrays to enable checking against three independent mechanisms
 
-4. **Timestamps**: I enabled automatic tracking to allow future features like poll expiration or analytics
+4. **Vote Mapping with Map**: I used the `tokenVotes` Map to store which option each token/clientId voted for, enabling the "Your Vote" badge to persist across page refreshes
+
+5. **Timestamps**: I enabled automatic tracking to allow future features like poll expiration or analytics
 
 ### My API Design Philosophy
 
@@ -285,13 +303,14 @@ When designing the APIs, I followed these principles:
 
 **Endpoint**: `GET /api/polls/:id`
 
-**Description**: Retrieves poll data and determines if the requesting client has already voted.
+**Description**: Retrieves poll data and determines if the requesting client has already voted (checks Google OAuth user, vote token, or client ID).
 
 **Headers** (optional):
 
 ```
-x-vote-token: abc123def456      # Token from previous vote
-x-client-id: uuid-client-id     # Browser-unique identifier
+Authorization: Bearer <FIREBASE_ID_TOKEN>    # If user is signed in
+x-vote-token: abc123def456                   # Token from previous vote
+x-client-id: uuid-client-id                  # Browser-unique identifier
 ```
 
 **Success Response** (200):
@@ -319,11 +338,11 @@ x-client-id: uuid-client-id     # Browser-unique identifier
 }
 ```
 
-**Backend Logic**:
+**Backend Logic** (Priority Order):
 
-1. Check if `x-vote-token` header exists and is in `poll.tokenVotes` Map
-2. If found, return the vote index
-3. Otherwise, check if `x-client-id` header exists and is in `poll.tokenVotes` Map
+1. If user is authenticated (Authorization header), check Vote collection: `Vote.findOne({ pollId, userId })`
+2. If `x-vote-token` header exists, check `poll.tokenVotes.get(voteToken)`
+3. If `x-client-id` header exists, check `poll.tokenVotes.get(clientId)`
 4. Return vote index or `null`
 
 **Error Response** (404):
@@ -341,13 +360,14 @@ x-client-id: uuid-client-id     # Browser-unique identifier
 
 **Endpoint**: `POST /api/polls/:id/vote`
 
-**Description**: Records a vote on a specific option, enforces fairness checks, and broadcasts update via Socket.IO.
+**Description**: Records a vote on a specific option, enforces multi-layer fairness checks (Google OAuth + token + clientId), and broadcasts update via Socket.IO.
 
-**Headers**:
+**Headers** (required):
 
 ```
-x-vote-token: abc123def456      # Previous vote token (if exists)
-x-client-id: uuid-client-id     # Browser client ID
+Authorization: Bearer <FIREBASE_ID_TOKEN>    # REQUIRED: Firebase ID token from Google OAuth
+x-vote-token: abc123def456                   # Optional: Token from previous vote
+x-client-id: uuid-client-id                  # Optional: Browser client ID
 ```
 
 **Request Body**:
@@ -381,24 +401,41 @@ x-client-id: uuid-client-id     # Browser client ID
 
 **How I Implemented the Vote Flow:**
 
-1. **Validate Option Index**: Check if `optionIndex` is within valid range
-2. **Check Vote Token**: If `x-vote-token` header exists and is in `votedTokens` array, reject with 400
-3. **Check Client ID**: If `x-client-id` header exists and is in `votedClients` array, reject with 400
-4. **Generate New Token**: Create a cryptographically secure random token (32 bytes)
-5. **Increment Vote Count**: `poll.options[optionIndex].votes++`
-6. **Record Fairness Data**:
+1. **Validate Authentication**: Verify Firebase ID token with Firebase Admin SDK
+2. **Extract User ID**: Extract userId from decoded token
+3. **Check Layer 1 (Google OAuth)**: Query Vote collection: `Vote.findOne({ pollId, userId })`
+   - If found → Reject with 400 "Already voted"
+4. **Validate Option Index**: Check if `optionIndex` is within valid range
+5. **Check Layer 2 (Vote Token)**: If `x-vote-token` header exists and is in `votedTokens` array, reject with 400
+6. **Check Layer 3 (Client ID)**: If `x-client-id` header exists and is in `votedClients` array, reject with 400
+7. **Generate New Token**: Create a cryptographically secure random token (16 bytes: `crypto.randomBytes(16).toString('hex')`)
+8. **Increment Vote Count**: `poll.options[optionIndex].votes++`
+9. **Record Fairness Data**:
+   - Create Vote document: `Vote.create({ pollId, userId, optionId, userEmail, votedAt })`
    - Add new token to `votedTokens` array
-   - Add clientId to `votedClients` array
+   - Add clientId to `votedClients` array (if provided)
    - Set `tokenVotes.set(newToken, optionIndex)`
-   - Set `tokenVotes.set(clientId, optionIndex)`
-7. **Save to Database**: `await poll.save()`
-8. **Broadcast Update**: `io.to(pollId).emit("voteUpdate", poll)`
-9. **Return Response**: Include new vote token in response
+   - Set `tokenVotes.set(clientId, optionIndex)` (if provided)
+10. **Save to Database**: `await poll.save()`
+11. **Broadcast Update**: `io.to(pollId).emit("voteUpdate", poll)`
+12. **Return Response**: Include new vote token in response
 
 **Error Responses**:
 
 ```json
-// Already voted
+// Not authenticated
+{
+  "success": false,
+  "message": "Authentication required"
+}
+
+// Invalid token
+{
+  "success": false,
+  "message": "Invalid authentication token"
+}
+
+// Already voted (any layer)
 {
   "success": false,
   "message": "Already voted on this poll"
@@ -472,7 +509,7 @@ All clients that have called `socket.emit("joinPoll", pollId)` receive the updat
 
 ## Fairness & Anti-Abuse Mechanisms
 
-This section explains the dual-layer approach to preventing vote manipulation while maintaining simplicity appropriate for an internship-level assignment.
+This section explains my multi-layered authentication and fairness approach that implements **at least 2 mechanisms** as required by the assignment, with Google OAuth serving as the primary authentication layer.
 
 ### Why Fairness Matters
 
@@ -482,13 +519,144 @@ Without fairness mechanisms, a single user could:
 - Skew results by submitting votes programmatically
 - Manipulate outcomes in favor of specific options
 
-For a polling application, even basic fairness is essential to maintain data integrity and user trust.
+For a polling application, robust fairness is essential to maintain data integrity and user trust.
 
-### Mechanism 1: Vote Token (Server-Issued)
+### Assignment Requirement: Multi-Layer Fairness
+
+The assignment explicitly required **at least 2 fairness mechanisms**. I implemented **3 layers** providing defense-in-depth:
+
+1. **Google OAuth Authentication** (PRIMARY) - User account verification
+2. **Vote Token** (SECONDARY) - Server-issued secure token
+3. **Client ID** (TERTIARY) - Browser fingerprint
+
+### Layer 1: Google OAuth Authentication (PRIMARY)
 
 **How It Works**:
 
-1. **Generation**: After a successful vote, the backend generates a cryptographically secure random token using `crypto.randomBytes(32).toString('hex')`
+1. **User Sign-In**: Users authenticate with Google OAuth via Firebase Auth
+   ```typescript
+   const signInWithGoogle = async () => {
+       const provider = new GoogleAuthProvider();
+       await signInWithPopup(auth, provider);
+   };
+   ```
+
+2. **Token Issuance**: Firebase issues a JWT ID token containing user's UID
+   ```typescript
+   const idToken = await user.getIdToken();
+   ```
+
+3. **Vote Request**: Frontend sends ID token with vote request
+   ```typescript
+   api.post(`/polls/${id}/vote`, 
+       { optionIndex },
+       { headers: { Authorization: `Bearer ${idToken}` } }
+   );
+   ```
+
+4. **Backend Verification**: Firebase Admin SDK verifies token authenticity
+   ```typescript
+   const decodedToken = await admin.auth().verifyIdToken(idToken);
+   const userId = decodedToken.uid;  // Unique Google account ID
+   ```
+
+5. **Vote Recording**: Vote is recorded in separate Vote collection
+   ```typescript
+   const existingVote = await Vote.findOne({ pollId, userId });
+   if (existingVote) {
+       return res.status(400).json({ message: "Already voted" });
+   }
+   
+   await Vote.create({
+       pollId,
+       userId,
+       optionId,
+       userEmail: decodedToken.email,
+       votedAt: new Date()
+   });
+   ```
+
+**Code Example** (Backend Middleware):
+
+```typescript
+// src/middleware/auth.ts
+export const verifyAuthToken = async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader?.startsWith('Bearer ')) {
+            return res.status(401).json({ message: "Authentication required" });
+        }
+
+        const idToken = authHeader.split('Bearer ')[1];
+        const decodedToken = await admin.auth().verifyIdToken(idToken);
+        
+        req.user = {
+            uid: decodedToken.uid,
+            email: decodedToken.email,
+            name: decodedToken.name
+        };
+        
+        next();
+    } catch (error) {
+        return res.status(401).json({ message: "Invalid authentication token" });
+    }
+};
+```
+
+**Code Example** (Frontend Auth Context):
+
+```typescript
+// src/contexts/AuthContext.tsx
+export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
+    const [user, setUser] = useState<User | null>(null);
+    
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+            setUser(firebaseUser);
+        });
+        return unsubscribe;
+    }, []);
+    
+    const signInWithGoogle = async () => {
+        const provider = new GoogleAuthProvider();
+        await signInWithPopup(auth, provider);
+    };
+    
+    const getIdToken = async () => {
+        if (!user) return null;
+        return await user.getIdToken();
+    };
+    
+    return (
+        <AuthContext.Provider value={{ user, signInWithGoogle, signOut, getIdToken }}>
+            {children}
+        </AuthContext.Provider>
+    );
+};
+```
+
+**Strengths**:
+
+- **Account-Level Protection**: Ties votes to verifiable Google accounts
+- **Server-Side Verification**: Token verification happens server-side (cannot be forged)
+- **Cryptographically Secure**: Firebase uses industry-standard JWT with RS256 signing
+- **User Attribution**: Enables tracking votes per user (optional email recording)
+- **Scalable**: Firebase handles millions of authentications
+- **Social Proof**: Users trust Google authentication
+
+**Limitations**:
+
+- **Requires Google Account**: Users without Google accounts cannot vote
+- **Account Creation Overhead**: Users must sign in before voting
+- **Multiple Google Accounts**: Determined users could create multiple Google accounts (but requires effort)
+
+---
+
+### Layer 2: Vote Token (SECONDARY)
+
+**How It Works**:
+
+1. **Generation**: After a successful vote, the backend generates a cryptographically secure random token using `crypto.randomBytes(16).toString('hex')`
 
 2. **Storage**: The token is:
    - Returned in the API response
@@ -506,9 +674,10 @@ For a polling application, even basic fairness is essential to maintain data int
 
 ```typescript
 // Generate token after vote
-const newToken = crypto.randomBytes(32).toString('hex');
+const newToken = crypto.randomBytes(16).toString('hex');
 
 // Check for duplicate
+const voteToken = req.headers["x-vote-token"] as string | undefined;
 if (voteToken && poll.votedTokens.includes(voteToken)) {
     return res.status(400).json({
         success: false,
@@ -519,38 +688,49 @@ if (voteToken && poll.votedTokens.includes(voteToken)) {
 // Store token
 poll.votedTokens.push(newToken);
 poll.tokenVotes.set(newToken, optionIndex);
+await poll.save();
+
+// Return token to client
+res.json({ voteToken: newToken });
 ```
 
 **Code Example** (Frontend):
 
 ```typescript
 // Store token after voting
-localStorage.setItem("voteToken", res.data.voteToken);
+if (res.data.voteToken) {
+    localStorage.setItem("voteToken", res.data.voteToken);
+}
 
 // Send token with future requests
-api.get(`/polls/${id}`, {
-    headers: {
-        "x-vote-token": localStorage.getItem("voteToken")
+const voteToken = localStorage.getItem("voteToken");
+api.post(`/polls/${id}/vote`, 
+    { optionIndex },
+    {
+        headers: {
+            Authorization: `Bearer ${idToken}`,
+            ...(voteToken && { "x-vote-token": voteToken })
+        }
     }
-});
+);
 ```
 
 **Strengths**:
 
-- Server-controlled: Cannot be forged or predicted
-- Session-persistent: Survives page refreshes
-- Simple to implement and understand
-- Cryptographically secure randomness
+- **Server-Controlled**: Cannot be forged or predicted (crypto-secure randomness)
+- **Session-Persistent**: Survives page refreshes
+- **Simple to Implement**: Straightforward token generation and verification
+- **Complements OAuth**: Provides secondary check if auth is bypassed
 
 **Limitations**:
 
-- Cleared if user clears browser storage
-- Not shared across browsers or devices
-- No protection against incognito mode
+- **Storage-Dependent**: Cleared if user clears browser storage
+- **Not Shared Across Browsers**: Each browser gets independent token
+- **Incognito Mode**: Fresh storage on each session
 
 ---
 
-### Mechanism 2: Client ID (Browser-Based)
+### Layer 3: Client ID (TERTIARY)
 
 **How It Works**:
 
@@ -577,7 +757,7 @@ api.get(`/polls/${id}`, {
 **Code Example** (Frontend):
 
 ```typescript
-// clientId.ts utility
+// lib/clientId.ts utility
 export function getClientId(): string {
     if (typeof window === 'undefined') return '';
     
@@ -593,7 +773,13 @@ export function getClientId(): string {
 const clientId = getClientId();
 api.post(`/polls/${id}/vote`, 
     { optionIndex },
-    { headers: { "x-client-id": clientId } }
+    { 
+        headers: { 
+            Authorization: `Bearer ${idToken}`,
+            "x-vote-token": voteToken,
+            "x-client-id": clientId
+        } 
+    }
 );
 ```
 
@@ -618,21 +804,29 @@ if (clientId) {
 
 **Strengths**:
 
-- Browser-unique: Different from vote token, adds second layer
-- Persistent: Survives across sessions and polls
-- Lightweight: No server-side session management
-- Complements vote token mechanism
+- **Browser-Unique**: Different from vote token, adds third layer
+- **Persistent**: Survives across sessions and polls
+- **Lightweight**: No server-side session management
+- **Complements OAuth and Token**: Provides tertiary defense
 
 **Limitations**:
 
-- Client-generated: User could theoretically modify code to generate new IDs
-- Storage-dependent: Cleared with `localStorage`
-- Not shared across browsers
+- **Client-Generated**: User could theoretically modify code to generate new IDs
+- **Storage-Dependent**: Cleared with `localStorage`
+- **Not Shared Across Browsers**: Each browser gets independent ID
 
-### How My Two Mechanisms Work Together
+---
+
+### How My Three Mechanisms Work Together
 
 ```
 Vote Attempt Flow:
+┌──────────────────────┐
+│ User must sign in    │
+│ with Google OAuth    │
+└──────────┬───────────┘
+           │
+           ▼
 ┌──────────────────────┐
 │ User clicks option   │
 └──────────┬───────────┘
@@ -640,19 +834,28 @@ Vote Attempt Flow:
            ▼
 ┌─────────────────────────────────────────┐
 │ Frontend sends:                         │
-│  - optionIndex in body                  │
+│  - Authorization: Bearer <ID TOKEN>     │
 │  - x-vote-token header (if exists)      │
 │  - x-client-id header (always)          │
+│  - optionIndex in body                  │
 └──────────┬──────────────────────────────┘
            │
            ▼
 ┌─────────────────────────────────────────┐
-│ Backend checks:                         │
-│  1. Is voteToken in votedTokens[]?      │
+│ Backend verifies:                       │
+│  1. Firebase ID token valid?            │
+│     ├─ Invalid/Missing → Reject (401)   │
+│     └─ Valid → Extract userId           │
+│                                         │
+│  2. Is userId in Vote collection?       │
 │     ├─ Yes → Reject (400)               │
 │     └─ No → Continue                    │
 │                                         │
-│  2. Is clientId in votedClients[]?      │
+│  3. Is voteToken in votedTokens[]?      │
+│     ├─ Yes → Reject (400)               │
+│     └─ No → Continue                    │
+│                                         │
+│  4. Is clientId in votedClients[]?      │
 │     ├─ Yes → Reject (400)               │
 │     └─ No → Continue                    │
 └──────────┬──────────────────────────────┘
@@ -660,6 +863,7 @@ Vote Attempt Flow:
            ▼
 ┌─────────────────────────────────────────┐
 │ Record vote:                            │
+│  - Create Vote document (userId)        │
 │  - Increment option votes               │
 │  - Generate new token                   │
 │  - Add token to votedTokens[]           │
@@ -671,26 +875,74 @@ Vote Attempt Flow:
 └─────────────────────────────────────────┘
 ```
 
-**Example Scenario**:
+**Priority Order**:
 
-1. **User A** votes on Poll X from Chrome
-   - `voteToken1` generated and stored
-   - `clientId1` recorded
-   - Vote recorded
+When checking if a user has voted (GET /polls/:id):
 
-2. **User A** refreshes page and tries to vote again
-   - Browser sends `voteToken1` and `clientId1`
-   - Backend finds both in arrays → Rejects
+1. **Check Google OAuth User ID** (if authenticated)
+   - Look in Vote collection: `Vote.findOne({ pollId, userId })`
+   - If found → User has voted
 
-3. **User A** clears localStorage and tries to vote
-   - No `voteToken`, but `clientId` regenerated (same UUID unlikely)
-   - Backend only checks new `clientId` → Could vote again (limitation)
+2. **Check Vote Token** (if present in header)
+   - Look in poll.tokenVotes Map: `poll.tokenVotes.get(voteToken)`
+   - If found → User has voted
 
-4. **User B** votes from same Chrome browser (different session)
-   - Same `clientId` as User A (shared browser storage)
-   - Backend finds `clientId` in array → Rejects
+3. **Check Client ID** (if present in header)
+   - Look in poll.tokenVotes Map: `poll.tokenVotes.get(clientId)`
+   - If found → User has voted
 
-**Result**: My system prevents most casual duplicate voting while accepting that determined users can bypass with effort (which I consider acceptable for this assignment's scope).
+**Example Scenarios**:
+
+**Scenario 1: Normal User Flow**
+1. User signs in with Google → Gets userId
+2. User votes on Poll X → Vote recorded with userId, voteToken, clientId
+3. User refreshes page → All 3 identifiers sent → Backend returns userVotedOption
+4. User tries to vote again → Blocked at Layer 1 (userId check)
+
+**Scenario 2: User Clears Storage**
+1. User votes on Poll X (authenticated)
+2. User clears localStorage → Loses voteToken and clientId (but still signed in)
+3. User tries to vote again → Blocked at Layer 1 (userId still valid)
+4. **Result**: OAuth prevents duplicate vote
+
+**Scenario 3: User Signs Out**
+1. User votes on Poll X (authenticated)
+2. User signs out of Google → Loses userId (but keeps voteToken and clientId)
+3. Different user signs in on same browser → Different userId
+4. Different user tries to vote → Blocked at Layer 2 (voteToken check) or Layer 3 (clientId check)
+5. **Result**: Token or ClientId prevents duplicate vote
+
+**Scenario 4: Multiple Browsers**
+1. User signs in on Chrome → Votes on Poll X
+2. User opens Firefox → Signs in with same Google account
+3. Firefox has different voteToken and clientId (fresh storage)
+4. User tries to vote → Blocked at Layer 1 (userId check)
+5. **Result**: OAuth prevents cross-browser duplicate
+
+---
+
+### Why This Multi-Layer Approach Exceeds Assignment Requirements
+
+**Assignment Required**: At least 2 fairness mechanisms
+
+**I Implemented**: 3 layers (Google OAuth + Token + ClientID)
+
+**Advantages of My Approach**:
+
+1. **Defense-in-Depth**: If one layer fails, others catch duplicates
+2. **OAuth as Primary**: Strongest mechanism (account-based) is the first check
+3. **Fallback Mechanisms**: Token and ClientID work even if OAuth bypassed
+4. **User Experience**: "Your Vote" badge persists across OAuth state changes
+5. **Production-Ready**: Similar to enterprise applications (Auth0 + CSRF tokens + fingerprinting)
+
+**Comparison with Single-Mechanism Approaches**:
+
+| Approach | Protection Level | User Friction | Bypass Difficulty |
+|----------|------------------|---------------|-------------------|
+| **IP-Based Only** | Low | None | Easy (VPN, mobile network switch) |
+| **Token Only** | Medium | Low | Medium (clear storage, incognito) |
+| **OAuth Only** | High | Medium | Hard (need multiple Google accounts) |
+| **My 3-Layer System** | Very High | Medium | Very Hard (need all 3 bypasses) |
 
 ---
 
@@ -699,34 +951,32 @@ Vote Attempt Flow:
 | Threat | Mitigated? | How |
 |--------|-----------|-----|
 | Accidental double-click | ✅ Yes | Button disabled after vote + frontend state |
-| Page refresh | ✅ Yes | Vote token and clientId persist in localStorage |
-| Multiple browsers (same device) | ⚠️ Partial | Different browsers = different storage = can vote again |
-| Incognito mode | ❌ No | Fresh storage on each session |
-| Clearing localStorage | ❌ No | Removes both token and clientId |
-| Multiple devices | ❌ No | Storage is device/browser-specific |
-| Automated bot voting | ⚠️ Partial | Would need to generate unique clientIds per request |
-| Developer tools manipulation | ❌ No | Advanced users can modify frontend code |
+| Page refresh | ✅ Yes | All 3 identifiers persist in storage/auth |
+| Multiple browsers (same device) | ✅ Yes | Google OAuth userId is device-independent |
+| Multiple devices (same account) | ✅ Yes | Google OAuth userId is account-specific |
+| Incognito mode | ✅ Yes | Google OAuth requires sign-in each session |
+| Clearing localStorage | ✅ Yes | Google OAuth userId still enforced |
+| Sign out and sign in | ✅ Yes | Vote collection tracks userId permanently |
+| Automated bot voting | ✅ Partial | Bots need Google accounts (hard to automate at scale) |
+| Developer tools manipulation | ⚠️ Partial | Can modify clientId, but OAuth and token enforced server-side |
+| Multiple Google accounts | ⚠️ Partial | Technically possible but requires effort (one vote per account) |
 
 **Understanding the Symbols**:
-- ✅ **Yes** = Successfully mitigated with my token-based approach
-- ⚠️ **Partial** = Partially solved, but not completely
-- ❌ **No** = **These are architectural limitations and disadvantages** of my approach
+- ✅ **Yes** = Successfully mitigated with my multi-layer approach
+- ⚠️ **Partial** = Significantly harder but not impossible
+- ❌ **No** = Not addressable without additional infrastructure
 
-**About the ❌ Cases (Known Disadvantages)**:
+**About the ⚠️ Cases**:
 
-I want to be transparent: the cases marked with ❌ represent **edge cases I cannot solve** without implementing a full user authentication system. These are fundamental limitations of my token-based approach:
+The partially mitigated cases represent the practical limits of client-side fairness:
 
-- **Incognito mode**: Browser design prevents persistence across sessions
-- **Clearing localStorage**: Users have control over their browser storage  
-- **Multiple devices**: Storage is inherently device-specific
-- **Developer tools manipulation**: Cannot prevent frontend code modification
+- **Developer tools manipulation**: While a user can modify clientId in the frontend, they cannot forge Firebase ID tokens (RS256 signed by Google). The OAuth layer still prevents duplicates.
 
-These are **trade-offs I consciously made** when choosing simplicity over perfect security. While these are disadvantages, I believe they're acceptable for this assignment's scope because:
-1. They require deliberate user action (not accidental abuse)
-2. Solving them would require authentication (login system, databases, sessions)
-3. They're honest limitations I'm documenting rather than hiding
-
-If this were a production system requiring bulletproof security, I would implement proper user authentication with server-side session management. But for a real-time polling demo, I prioritized demonstrating real-time capabilities and basic fairness over perfect vote security.
+- **Multiple Google accounts**: A determined user could create multiple Google accounts to vote multiple times. However:
+  - This requires significant effort (phone verification, email management)
+  - It's rate-limited by Google's account creation policies
+  - It's detectable via email pattern analysis (same domain, sequential names)
+  - It's the same limitation as any OAuth-based system (Twitter polls, YouTube likes, etc.)
 
 ---
 
@@ -734,30 +984,35 @@ If this were a production system requiring bulletproof security, I would impleme
 
 **For This Internship Assignment**:
 
-1. **Demonstrates Understanding**: Shows I understand fairness concerns and multiple mitigation strategies
+1. **Exceeds Requirements**: Assignment asked for 2+ mechanisms; I provided 3
+2. **Production-Grade**: Uses industry-standard OAuth (Firebase) with defense-in-depth
+3. **Demonstrates Understanding**: Shows knowledge of authentication, tokens, and fairness trade-offs
+4. **Scalable**: Firebase Auth handles millions of users
+5. **Explainable**: Clear documentation of each layer and their interactions
 
-2. **Balances Complexity**: I avoided over-engineering (authentication, fingerprinting, rate limiting) while showing engineering judgment
+**What This Is Suitable For**:
 
-3. **Production-Ready for MVP**: Sufficient for a demo/MVP product with moderate traffic
+- Corporate polls (within organization)
+- Event voting (conference talks, hackathon projects)
+- Product feedback collection
+- Community surveys
+- Educational quizzes with Google Classroom integration
+- SaaS product feedback (users already have Google accounts)
 
-4. **Extensible**: Clear path to add authentication or advanced fingerprinting later
+**What This Is NOT Suitable For**:
 
-5. **Explainable**: Simple enough for me to document and defend in code review
-
-**What I Know This Is NOT Suitable For**:
-
-- High-stakes voting (elections, contests)
+- High-stakes voting (elections, legal decisions)
 - Financial transactions
 - Regulated industries requiring audit trails
-- Large-scale public polls with abuse incentives
+- Anonymous polls (OAuth reveals identity)
 
-**Where I Think It Works Well**:
+**Where This Approach Shines**:
 
-- Internal team polls
-- Classroom surveys
-- Community feedback collection
-- Product feedback forms
-- Event voting (best talk, favorite feature)
+My multi-layer system provides a good balance of:
+- Security (OAuth + defense-in-depth)
+- User experience (familiar Google sign-in)
+- Implementation complexity (reasonable for assignment)
+- Extensibility (easy to add more checks)
 
 ---
 
@@ -1867,45 +2122,51 @@ const uniqueOptions = [...new Set(filteredOptions)];
 
 ## Known Limitations I'm Aware Of
 
-### 1. No Authentication System
+### 1. No User Management Beyond Voting
 
-**Limitation**: Anyone with the poll link can vote. No user accounts or profiles.
+**Limitation**: While users authenticate with Google OAuth, there's no user profile, dashboard, or voting history.
 
 **Impact**:
 
-- Cannot identify voters by name or email
-- Cannot implement features like "edit your vote" or "view your voting history"
+- Cannot view all polls created or voted on
+- No "edit your vote" functionality
 - Cannot restrict polls to specific user groups
+- No user analytics or engagement metrics
 
-**Rationale**: The assignment scope focused on real-time functionality, not user management.
+**Rationale**: The assignment scope focused on real-time functionality and fairness, not comprehensive user management.
 
-**How I Mitigate This**: My fairness mechanisms (token + clientId) provide basic abuse prevention.
+**How I Mitigate This**: Authentication still enables vote tracking and prevents abuse at the account level.
 
 ---
 
-### 2. LocalStorage Dependency
+### 2. Google Account Requirement
 
-**Limitation**: Vote tokens and client IDs are stored in browser's localStorage.
+**Limitation**: Users must have a Google account to vote.
 
 **Impact**:
 
-- Clearing browser data removes voting record
-- Incognito mode creates fresh storage each session
-- No persistence across devices
+- Excludes users without Google accounts
+- Reduces spontaneous participation (requires sign-in)
+- May not be suitable for public/anonymous polls
 
-**Why I Didn't Use Cookies**: Cookies would face similar limitations and add complexity with CORS and security flags.
+**Rationale**: Trade-off between strong fairness (account-based authentication) and accessibility.
 
-**Why I Didn't Use Server Sessions**: Would require authentication system (out of scope for this assignment).
+**Alternatives**: Could add email-based magic links or anonymous mode with weaker fairness guarantees.
 
 ---
 
-### 3. Client-Generated IDs
+### 3. LocalStorage Dependency
 
-**Limitation**: Client ID is generated on the frontend, so technically a user could modify code to generate new IDs.
+**Limitation**: Vote tokens and client IDs are stored in browser's localStorage (secondary/tertiary layers).
 
-**Impact**: Determined users could bypass clientId check with developer tools.
+**Impact**:
 
-**Rationale**: For this internship assignment, I believe this level of security is acceptable. Production systems might use server-side fingerprinting or device identification services.
+- "Your Vote" badge may not persist if storage is cleared (but OAuth prevents duplicate votes)
+- Multiple voting prevented by OAuth, not storage
+
+**Why OAuth Solves This**: Unlike the token-only approach, clearing localStorage no longer allows duplicate voting since the primary check is Google account-based.
+
+**Secondary Benefit**: Token and ClientID layers still provide "Your Vote" badge persistence for better UX.
 
 ---
 
@@ -2042,22 +2303,23 @@ For large-scale deployment, I would need:
 
 ### Medium-Term Features I Would Build
 
-1. **Authentication System**
-   - I would implement user registration and login (email + password)
-   - Google/GitHub OAuth integration
-   - User dashboard showing created polls
+1. **Enhanced User System**
+   - I would build user dashboards showing created polls
    - Vote history and analytics
+   - Email notifications for poll updates
+   - User preferences and settings
 
-2. **Poll Editing**
+2. **Poll Editing & Management**
    - I would allow editing question/options before first vote
    - Lock editing after votes are cast
    - Show edit history (audit log)
+   - Transfer poll ownership
 
-3. **Advanced Fairness**
-   - I would add browser fingerprinting (Canvas, WebGL, fonts)
-   - IP-based rate limiting (with proxy detection)
-   - CAPTCHA on vote submission
-   - Machine learning-based anomaly detection
+3. **Advanced Authentication**
+   - I would add email-based magic links
+   - Support for Microsoft, GitHub OAuth
+   - Anonymous mode with limited features
+   - Two-factor authentication for sensitive polls
 
 4. **Results Visualization**
    - I would add pie charts and bar graphs
@@ -2134,7 +2396,15 @@ For large-scale deployment, I would need:
    npm install
    ```
 
-3. **Create Environment File**
+3. **Set Up Firebase Admin SDK**
+   - Go to [Firebase Console](https://console.firebase.google.com/)
+   - Create a new project (or use existing)
+   - Navigate to Project Settings → Service Accounts
+   - Click "Generate New Private Key"
+   - Save the JSON file as `serviceAccountKey.json` in the backend root directory
+   - **IMPORTANT**: This file is gitignored; never commit it to version control
+
+4. **Create Environment File**
    ```bash
    # Create .env file
    touch .env
@@ -2148,7 +2418,7 @@ For large-scale deployment, I would need:
    PORT=5000
    ```
 
-4. **Start Development Server**
+5. **Start Development Server**
    ```bash
    npm run dev
    # or for production build:
@@ -2156,7 +2426,7 @@ For large-scale deployment, I would need:
    npm start
    ```
 
-5. **Verify Server Running**
+6. **Verify Server Running**
    - Open browser to `http://localhost:5000`
    - You should see "Cannot GET /" (this is expected, I didn't define a root route)
    - Test with: `curl http://localhost:5000/api/polls`
@@ -2175,49 +2445,89 @@ For large-scale deployment, I would need:
    npm install
    ```
 
-3. **Create Environment File**
+3. **Set Up Firebase Client SDK**
+   - Go to [Firebase Console](https://console.firebase.google.com/)
+   - Navigate to Project Settings → General
+   - Scroll to "Your apps" section
+   - Click "Add app" → Select Web (</> icon)
+   - Register your app and copy the Firebase configuration object
+
+4. **Create Environment File**
    ```bash
    # Create .env.local file
    touch .env.local
    ```
 
-   Add the following:
+   Add the following (replace with your Firebase project credentials):
    ```env
    NEXT_PUBLIC_API_URL=http://localhost:5000/api/polls
    NEXT_PUBLIC_SOCKET_URL=http://localhost:5000
+   
+   # Firebase Configuration
+   NEXT_PUBLIC_FIREBASE_API_KEY=your-api-key
+   NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=your-project-id.firebaseapp.com
+   NEXT_PUBLIC_FIREBASE_PROJECT_ID=your-project-id
+   NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=your-project-id.appspot.com
+   NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=your-sender-id
+   NEXT_PUBLIC_FIREBASE_APP_ID=your-app-id
+   NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID=your-measurement-id
    ```
 
-4. **Start Development Server**
+5. **Enable Google Authentication in Firebase**
+   - In Firebase Console, go to Authentication → Sign-in method
+   - Enable "Google" provider
+   - Add authorized domains (localhost is enabled by default)
+
+6. **Start Development Server**
    ```bash
    npm run dev
    ```
 
-5. **Open Application**
+7. **Open Application**
    - Navigate to `http://localhost:3000`
-   - You should see the homepage
+   - You should see the homepage with "Sign in with Google" option
 
 ---
 
 ### How to Test the Full Stack
 
-1. **Create a Poll**
+1. **Sign In with Google**
+   - Click "Sign in with Google" in the navbar
+   - Authenticate with your Google account
+   - You should see your profile picture in the navbar
+
+2. **Create a Poll**
    - Click "Create Poll"
    - Enter question and options
    - Submit
 
-2. **Vote on Poll**
-   - Share button → Copy link
-   - Open link in incognito window
-   - Vote on an option
+3. **Vote on Poll**
+   - You'll be redirected to the poll page
+   - Select an option and click "Vote"
+   - Verify your choice is highlighted with "Your Vote" badge
 
-3. **Verify Real-Time Updates**
-   - Keep both windows open
-   - Vote in one window
-   - Observe vote count update in other window instantly
+4. **Test Real-Time Updates**
+   - Copy the poll link
+   - Open link in incognito window
+   - Sign in with a different Google account
+   - Vote on an option
+   - Observe vote count update in original window instantly
+
+5. **Test Multi-Layer Fairness**
+   - Try voting again in same window → Should be blocked (Layer 1: OAuth)
+   - Sign out and sign back in → Should still show your vote and block duplicate (Layer 1: OAuth)
+   - Clear localStorage → Should still be blocked (Layer 1: OAuth persists)
+   - Open different browser with same Google account → Should be blocked (Layer 1: OAuth cross-browser)
 
 ---
 
 ### Common Issues You Might Encounter
+
+**Firebase Authentication Error**:
+- Verify all Firebase environment variables are set correctly in `.env.local`
+- Ensure Google sign-in provider is enabled in Firebase Console
+- Check that `serviceAccountKey.json` is in the backend root directory
+- Verify authorized domains include your deployment URL (for production)
 
 **MongoDB Connection Error**:
 - Ensure MongoDB is running (`sudo systemctl start mongodb` on Linux)
@@ -2228,6 +2538,11 @@ For large-scale deployment, I would need:
 - Ensure my backend is running on port 5000
 - Check CORS configuration allows frontend origin
 - Verify `NEXT_PUBLIC_SOCKET_URL` matches backend URL
+
+**"Authentication Required" Error**:
+- Ensure user is signed in with Google
+- Check that Firebase ID token is being sent in Authorization header
+- Verify backend can reach Firebase Auth service (not blocked by firewall)
 
 **"Module not found" Errors**:
 - Delete `node_modules` and `package-lock.json`
@@ -2335,11 +2650,17 @@ The code is ready for your review, the application is ready for use, and I'm rea
 ```
 applyo-assignment/
 ├── realtime-poll-backend/      # Express + Socket.IO backend
+│   ├── config/
+│   │   └── firebaseAdmin.ts    # Firebase Admin SDK setup
 │   ├── src/
 │   │   ├── server.ts
-│   │   ├── models/poll.ts
+│   │   ├── middleware/auth.ts  # Authentication middleware
+│   │   ├── models/
+│   │   │   ├── poll.ts         # Poll schema
+│   │   │   └── vote.ts         # Vote tracking schema
 │   │   ├── controllers/pollController.ts
 │   │   └── routes/pollRoutes.ts
+│   ├── serviceAccountKey.json  # Firebase credentials (gitignored)
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── .env
@@ -2351,9 +2672,13 @@ applyo-assignment/
 │   │   │   ├── create/page.tsx
 │   │   │   └── poll/[id]/page.tsx
 │   │   ├── components/
+│   │   │   └── NavbarAuth.tsx  # Auth UI component
+│   │   ├── contexts/
+│   │   │   └── AuthContext.tsx # Auth state management
 │   │   └── lib/
 │   │       ├── api.ts
 │   │       ├── socket.ts
+│   │       ├── firebase.ts     # Firebase client config
 │   │       └── clientId.ts
 │   ├── package.json
 │   ├── tsconfig.json

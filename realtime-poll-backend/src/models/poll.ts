@@ -1,5 +1,16 @@
 import { Schema, model, Document } from "mongoose";
 
+/**
+ * Updated Poll Model with Multi-Layered Fairness
+ * 
+ * FAIRNESS MECHANISMS (3 Layers):
+ * 1. PRIMARY: Google OAuth userId (tracked in Vote collection)
+ * 2. SECONDARY: Vote Token (localStorage fallback)  
+ * 3. TERTIARY: Client ID (browser fingerprint fallback)
+ * 
+ * Auth-based voting is primary, but token/clientId provide additional protection
+ * and allow basic voting for users who don't sign in (if you choose to allow it)
+ */
 interface IOption {
     text: string;
     votes: number;
@@ -8,10 +19,10 @@ interface IOption {
 export interface IPoll extends Document {
     question: string;
     options: IOption[];
-    votedTokens: string[];
-    votedClients: string[]; // Client ID-based fairness
-    votedIPs: string[]; // IP-based fairness (primary method)
-    tokenVotes: Map<string, number>; // Maps token/clientId/IP to optionIndex
+    createdBy?: string;  // Optional: userId of poll creator
+    votedTokens: string[];  // Secondary fairness: localStorage tokens
+    votedClients: string[];  // Tertiary fairness: browser fingerprints
+    tokenVotes: Map<string, number>;  // Maps token/clientId to optionIndex for "Your Vote" badge
 }
 
 const optionSchema = new Schema<IOption>({
@@ -23,14 +34,14 @@ const pollSchema = new Schema<IPoll>(
     {
         question: { type: String, required: true },
         options: [optionSchema],
-        votedTokens: [String],  // Token-based fairness
-        votedClients: [String], // Client ID-based fairness
-        votedIPs: [String],     // IP-based fairness (primary method)
+        createdBy: { type: String, required: false },  // Store creator's Google UID
+        votedTokens: [String],  // Token-based fairness (secondary)
+        votedClients: [String],  // Client ID-based fairness (tertiary)
         tokenVotes: {
             type: Map,
             of: Number,
             default: new Map()
-        }  // Maps token/clientId/IP to optionIndex
+        }  // Maps token/clientId to optionIndex
     },
     { timestamps: true }
 );

@@ -28,12 +28,15 @@ app.use(cors());
 app.use(express.json());
 
 io.on("connection", (socket) => {
+    console.log("Client connected:", socket.id);
+
     socket.on("joinPoll", (pollId: string) => {
+        console.log(`Socket ${socket.id} joining poll room: ${pollId}`);
         socket.join(pollId);
     });
 
     socket.on("disconnect", () => {
-        // Socket disconnected
+        console.log("Client disconnected:", socket.id);
     });
 
     socket.on("error", (error) => {
@@ -56,7 +59,8 @@ mongoose
     .connect(process.env.MONGO_URI as string)
     .then(() => {
         server.listen(PORT, () => {
-            // Server started
+            console.log(`🚀 Server running on port ${PORT}`);
+            console.log(`📡 Socket.IO ready for connections`);
         });
     })
     .catch((error) => {
