@@ -10,7 +10,8 @@ export interface IPoll extends Document {
     options: IOption[];
     votedTokens: string[];
     votedClients: string[]; // Client ID-based fairness
-    tokenVotes: Map<string, number>; // Maps token/clientId to optionIndex
+    votedIPs: string[]; // IP-based fairness (primary method)
+    tokenVotes: Map<string, number>; // Maps token/clientId/IP to optionIndex
 }
 
 const optionSchema = new Schema<IOption>({
@@ -24,11 +25,12 @@ const pollSchema = new Schema<IPoll>(
         options: [optionSchema],
         votedTokens: [String],  // Token-based fairness
         votedClients: [String], // Client ID-based fairness
+        votedIPs: [String],     // IP-based fairness (primary method)
         tokenVotes: {
             type: Map,
             of: Number,
             default: new Map()
-        }  // Maps token/clientId to optionIndex
+        }  // Maps token/clientId/IP to optionIndex
     },
     { timestamps: true }
 );

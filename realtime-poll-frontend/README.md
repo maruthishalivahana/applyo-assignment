@@ -2,8 +2,8 @@
 
 ## Internship Assignment Submission
 
-**Candidate**: [Your Name]  
-**Position**: Full-Stack Developer Intern  
+**Candidate**: Kummari Maruthi  
+**Position**: Developer Intern  
 **Date**: February 15, 2026
 
 ---

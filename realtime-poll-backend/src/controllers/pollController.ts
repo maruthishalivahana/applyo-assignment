@@ -4,6 +4,13 @@ import mongoose from "mongoose";
 import Poll, { IPoll } from "../models/poll";
 import crypto from "crypto";
 
+/**
+ * Multi-layered vote fairness system:
+ * 1. IP Address (Primary) - Prevents voting from same network across different browsers
+ * 2. Vote Token (Secondary) - Persists vote status in localStorage
+ * 3. Client ID (Tertiary) - Browser fingerprint for additional tracking
+ */
+
 
 
 export const createPoll = async (req: Request, res: Response) => {
@@ -98,13 +105,25 @@ export const getPoll = async (req: Request, res: Response) => {
         // Check if user has already voted and get their choice
         const voteToken = req.headers["x-vote-token"] as string | undefined;
         const clientId = req.headers["x-client-id"] as string | undefined;
+
+        // Get client IP address
+        const clientIP = (
+            req.headers["x-forwarded-for"] as string ||
+            req.headers["x-real-ip"] as string ||
+            req.socket.remoteAddress ||
+            ""
+        ).split(',')[0].trim();
+
         let userVotedOption: number | null = null;
 
-        // Check both token and clientId for vote tracking
-        if (voteToken && poll.tokenVotes) {
+        // Check IP first (primary method), then token, then clientId
+        if (clientIP && poll.tokenVotes) {
+            userVotedOption = poll.tokenVotes.get(clientIP) ?? null;
+        }
+        if (userVotedOption === null && voteToken && poll.tokenVotes) {
             userVotedOption = poll.tokenVotes.get(voteToken) ?? null;
         }
-        if (!userVotedOption && clientId && poll.tokenVotes) {
+        if (userVotedOption === null && clientId && poll.tokenVotes) {
             userVotedOption = poll.tokenVotes.get(clientId) ?? null;
         }
 
@@ -130,6 +149,14 @@ export const votePoll = async (req: Request, res: Response) => {
         const voteToken = req.headers["x-vote-token"] as string | undefined;
         const clientId = req.headers["x-client-id"] as string | undefined;
 
+        // Get client IP address (primary fairness mechanism)
+        const clientIP = (
+            req.headers["x-forwarded-for"] as string ||
+            req.headers["x-real-ip"] as string ||
+            req.socket.remoteAddress ||
+            ""
+        ).split(',')[0].trim();
+
         const poll = await Poll.findById(req.params.id);
         if (!poll) {
             return res.status(404).json({
@@ -145,7 +172,15 @@ export const votePoll = async (req: Request, res: Response) => {
             });
         }
 
-        // Fairness 1: Token method
+        // PRIMARY FAIRNESS CHECK: IP-based
+        if (clientIP && poll.votedIPs && poll.votedIPs.includes(clientIP)) {
+            return res.status(403).json({
+                success: false,
+                message: "Already voted from this network"
+            });
+        }
+
+        // Fairness 1: Token method (secondary check)
         if (voteToken && poll.votedTokens.includes(voteToken)) {
             return res.status(403).json({
                 success: false,
@@ -173,14 +208,25 @@ export const votePoll = async (req: Request, res: Response) => {
             poll.votedClients.push(clientId);
         }
 
+        // Store IP address (primary fairness mechanism)
+        if (clientIP) {
+            if (!poll.votedIPs) {
+                poll.votedIPs = [];
+            }
+            poll.votedIPs.push(clientIP);
+        }
+
         // Store which option was selected (for "Your Vote" badge persistence)
         if (!poll.tokenVotes) {
             poll.tokenVotes = new Map();
         }
-        // Store both token and clientId mappings
+        // Store mappings for token, clientId, and IP
         poll.tokenVotes.set(newToken, optionIndex);
         if (clientId) {
             poll.tokenVotes.set(clientId, optionIndex);
+        }
+        if (clientIP) {
+            poll.tokenVotes.set(clientIP, optionIndex);
         }
 
         await poll.save();

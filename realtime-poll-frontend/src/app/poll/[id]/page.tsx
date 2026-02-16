@@ -63,16 +63,10 @@ export default function PollPage() {
         }).then(res => {
             setPoll(res.data.poll);
 
-            // Check if user has already voted (by token OR clientId)
-            const hasVotedByToken = token && res.data.poll.votedTokens && Array.isArray(res.data.poll.votedTokens) && res.data.poll.votedTokens.includes(token);
-            const hasVotedByClient = clientId && res.data.poll.votedClients && Array.isArray(res.data.poll.votedClients) && res.data.poll.votedClients.includes(clientId);
-
-            if (hasVotedByToken || hasVotedByClient) {
+            // Backend now checks IP, token, and clientId - trust its userVotedOption response
+            if (res.data.userVotedOption !== null && res.data.userVotedOption !== undefined) {
                 setVoted(true);
-                // Set the selected option if backend returned it
-                if (res.data.userVotedOption !== null && res.data.userVotedOption !== undefined) {
-                    setSelectedOption(res.data.userVotedOption);
-                }
+                setSelectedOption(res.data.userVotedOption);
             }
         }).catch(err => {
             // Handle 404 - poll not found
@@ -151,7 +145,12 @@ export default function PollPage() {
         } catch (err: any) {
             const errorMsg = err?.response?.data?.message || err.message;
             if (errorMsg.includes("Already voted")) {
-                toast.error("You've already voted on this poll!", { id: loadingToast });
+                // Show appropriate message based on the type of block
+                if (errorMsg.includes("network")) {
+                    toast.error("Already voted from this network!", { id: loadingToast });
+                } else {
+                    toast.error("You've already voted on this poll!", { id: loadingToast });
+                }
             } else {
                 toast.error("Voting failed: " + errorMsg, { id: loadingToast });
             }
