@@ -378,7 +378,7 @@ export default function PollPage() {
                             <div className="pt-4 flex flex-col sm:flex-row gap-3 items-center justify-center">
                                 <button
                                     onClick={submitVote}
-                                    className="px-8 py-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 flex items-center gap-2"
+                                    className="px-8 py-3 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 flex items-center gap-2"
                                 >
                                     <CheckCircle2 className="w-5 h-5" />
                                     Submit Vote
