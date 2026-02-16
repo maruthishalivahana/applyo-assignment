@@ -629,28 +629,6 @@ if (clientId) {
 - Storage-dependent: Cleared with `localStorage`
 - Not shared across browsers
 
----
-
-### Why IP-Based Voting Was NOT Used
-
-**Common Approach**: Many polling systems check the user's IP address to prevent duplicate votes.
-
-**Why It Was Avoided Here**:
-
-1. **Shared Networks**: Multiple legitimate users on the same WiFi (office, university, home) would share one IP and be blocked after the first vote
-
-2. **Dynamic IPs**: Mobile networks and many ISPs use dynamic IP allocation, allowing the same user to vote multiple times by reconnecting
-
-3. **Privacy Concerns**: Storing IP addresses raises privacy and compliance issues (GDPR, CCPA)
-
-4. **VPN/Proxy**: Easily bypassed using VPN or proxy services
-
-5. **Complexity**: Requires IP parsing from headers, handling proxy headers (`X-Forwarded-For`), and geolocation logic
-
-**My Decision**: For this internship assignment, I decided client-side mechanisms (token + clientId) provide reasonable fairness without the drawbacks of IP-based systems.
-
----
-
 ### How My Two Mechanisms Work Together
 
 ```
