@@ -17,6 +17,7 @@ export default function PollPage() {
     const [poll, setPoll] = useState<any>(null);
     const [voted, setVoted] = useState(false);
     const [selectedOption, setSelectedOption] = useState<number | null>(null);
+    const [tempSelectedOption, setTempSelectedOption] = useState<number | null>(null);
     const [isCopied, setIsCopied] = useState(false);
     const [pollNotFound, setPollNotFound] = useState(false);
 
@@ -31,13 +32,13 @@ export default function PollPage() {
                 const optionIndex = parseInt(e.key) - 1;
                 if (poll && optionIndex < poll.options.length && !voted && user) {
                     e.preventDefault();
-                    vote(optionIndex);
+                    handleOptionSelect(optionIndex);
                 }
             }
-            // Enter to vote on selected option
-            else if (e.key === 'Enter' && selectedOption !== null && !voted && user) {
+            // Enter to submit vote
+            else if (e.key === 'Enter' && tempSelectedOption !== null && !voted && user) {
                 e.preventDefault();
-                vote(selectedOption);
+                submitVote();
             }
             // 'S' or 'C' to share/copy link
             else if ((e.key === 's' || e.key === 'S' || e.key === 'c' || e.key === 'C') && !e.ctrlKey && !e.metaKey) {
@@ -116,21 +117,37 @@ export default function PollPage() {
         };
     }, [id, user]);
 
-    const vote = async (index: number) => {
+    const handleOptionSelect = (index: number) => {
         if (!user) {
             toast.error("Please sign in with Google to vote");
             return;
         }
 
-        if (voted || !id) {
-            if (voted) {
-                toast.error("You've already voted on this poll!");
-            }
+        if (voted) {
+            toast.error("You've already voted on this poll!");
             return;
         }
 
-        // Optimistic UI update
-        setSelectedOption(index);
+        // Allow changing selection before submission
+        if (tempSelectedOption === index) {
+            // Deselect if clicking the same option
+            setTempSelectedOption(null);
+        } else {
+            // Select new option
+            setTempSelectedOption(index);
+        }
+    };
+
+    const submitVote = async () => {
+        if (!user) {
+            toast.error("Please sign in with Google to vote");
+            return;
+        }
+
+        if (voted || !id || tempSelectedOption === null) {
+            return;
+        }
+
         const loadingToast = toast.loading("Recording your vote...");
 
         try {
@@ -146,7 +163,7 @@ export default function PollPage() {
 
             const res = await api.post(
                 `/polls/${id}/vote`,
-                { optionIndex: index },
+                { optionIndex: tempSelectedOption },
                 {
                     headers: {
                         Authorization: `Bearer ${token}`,
@@ -162,7 +179,8 @@ export default function PollPage() {
             }
 
             setVoted(true);
-            setSelectedOption(index);
+            setSelectedOption(tempSelectedOption);
+            setTempSelectedOption(null);
             toast.success("Vote recorded successfully!", { id: loadingToast });
         } catch (err: any) {
             const errorMsg = err?.response?.data?.message || err.message;
@@ -175,7 +193,7 @@ export default function PollPage() {
             } else {
                 toast.error("Failed to record vote: " + errorMsg, { id: loadingToast });
             }
-            setSelectedOption(null); // Revert on failure
+            setTempSelectedOption(null); // Revert on failure
         }
     };
 
@@ -229,6 +247,21 @@ export default function PollPage() {
                     </div>
                 )}
 
+                {/* Voting Instructions */}
+                {user && !voted && tempSelectedOption === null && (
+                    <div className="mb-6 bg-blue-50 border border-blue-200 rounded-2xl p-4 flex items-start gap-3">
+                        <AlertCircle className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+                        <div className="flex-1">
+                            <p className="text-sm font-semibold text-blue-900 mb-1">
+                                How to Vote
+                            </p>
+                            <p className="text-sm text-blue-700">
+                                Click on an option to select it. You can change your selection before submitting. Click "Submit Vote" to confirm your choice.
+                            </p>
+                        </div>
+                    </div>
+                )}
+
                 {/* Card Container */}
                 <div className="bg-white rounded-3xl shadow-xl shadow-green-100/50 border border-slate-100 overflow-hidden">
 
@@ -257,25 +290,31 @@ export default function PollPage() {
                         {poll.options.map((opt: any, i: number) => {
                             const percent = totalVotes === 0 ? 0 : Math.round((opt.votes / totalVotes) * 100);
                             const isSelected = selectedOption === i;
+                            const isTempSelected = tempSelectedOption === i;
                             const canVote = user && !voted;
 
                             return (
                                 <div key={i} className="space-y-2">
                                     <button
                                         disabled={!canVote}
-                                        onClick={() => canVote && vote(i)}
+                                        onClick={() => canVote && handleOptionSelect(i)}
                                         className={`relative w-full text-left group transition-all duration-300 outline-none rounded-xl
                     ${canVote ? 'hover:scale-[1.01] hover:shadow-md cursor-pointer' : 'cursor-default'}
                     ${voted && isSelected ? 'ring-2 ring-[#1a6b3a] scale-[1.02]' : ''}
+                    ${!voted && isTempSelected ? 'ring-2 ring-green-500 scale-[1.02]' : ''}
                     ${!user ? 'opacity-60' : ''}
                   `}
                                     >
                                         {/* Background Progress Bar */}
                                         <div className="absolute inset-0 bg-slate-50 rounded-xl overflow-hidden border border-slate-200">
                                             <div
-                                                className={`h-full transition-all duration-1000 ease-out ${isSelected && voted ? 'bg-gradient-to-r from-green-500/20 to-green-600/20' : 'bg-slate-200/50'
+                                                className={`h-full transition-all duration-1000 ease-out ${isSelected && voted
+                                                    ? 'bg-gradient-to-r from-green-500/20 to-green-600/20'
+                                                    : isTempSelected && !voted
+                                                        ? 'bg-gradient-to-r from-green-500/20 to-green-600/20'
+                                                        : 'bg-slate-200/50'
                                                     }`}
-                                                style={{ width: voted ? `${percent}%` : '0%' }}
+                                                style={{ width: voted ? `${percent}%` : isTempSelected ? '100%' : '0%' }}
                                             />
                                         </div>
 
@@ -290,18 +329,23 @@ export default function PollPage() {
                      ${voted && isSelected ? 'bg-white/80' : ''}
                   `}>
                                             {/* Checkbox Circle */}
-                                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors flex-shrink-0
+                                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors shrink-0
                           ${isSelected && voted
                                                     ? 'border-[#1a6b3a] bg-[#1a6b3a] text-white'
-                                                    : isSelected
-                                                        ? 'border-[#1a6b3a] bg-[#1a6b3a] text-white'
+                                                    : isTempSelected && !voted
+                                                        ? 'border-green-600 bg-green-600 text-white'
                                                         : 'border-slate-300 group-hover:border-green-400'
                                                 }
                        `}>
-                                                {isSelected && <CheckCircle2 className="w-3.5 h-3.5" />}
+                                                {(isSelected && voted) || (isTempSelected && !voted) ? <CheckCircle2 className="w-3.5 h-3.5" /> : null}
                                             </div>
 
-                                            <span className={`font-medium flex-1 ${isSelected && voted ? 'text-green-900 font-semibold' : isSelected ? 'text-green-900' : 'text-slate-700'}`}>
+                                            <span className={`font-medium flex-1 ${isSelected && voted
+                                                ? 'text-green-900 font-semibold'
+                                                : isTempSelected && !voted
+                                                    ? 'text-green-900 font-semibold'
+                                                    : 'text-slate-700'
+                                                }`}>
                                                 {opt.text}
                                             </span>
 
@@ -328,6 +372,25 @@ export default function PollPage() {
                                 </div>
                             );
                         })}
+
+                        {/* Submit Vote Button - Only shown when option is selected but not yet submitted */}
+                        {!voted && tempSelectedOption !== null && user && (
+                            <div className="pt-4 flex flex-col sm:flex-row gap-3 items-center justify-center">
+                                <button
+                                    onClick={submitVote}
+                                    className="px-8 py-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 flex items-center gap-2"
+                                >
+                                    <CheckCircle2 className="w-5 h-5" />
+                                    Submit Vote
+                                </button>
+                                <button
+                                    onClick={() => setTempSelectedOption(null)}
+                                    className="px-6 py-3 text-slate-600 hover:text-slate-900 font-medium rounded-xl hover:bg-slate-100 transition-colors"
+                                >
+                                    Clear Selection
+                                </button>
+                            </div>
+                        )}
                     </div>
 
                     {/* Footer / Share */}
