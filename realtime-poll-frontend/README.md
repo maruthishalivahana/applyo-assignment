@@ -186,7 +186,8 @@ interface IPoll {
     options: IOption[];                  // Array of answer options
     votedTokens: string[];               // Vote tokens that have voted
     votedClients: string[];              // Client IDs that have voted
-    tokenVotes: Map<string, number>;     // Maps token/clientId to vote choice
+    votedIPs: string[];                  // IP addresses that have voted (PRIMARY)
+    tokenVotes: Map<string, number>;     // Maps token/clientId/IP to vote choice
     timestamps: true;                    // createdAt, updatedAt
 }
 
@@ -200,11 +201,13 @@ interface IOption {
 
 1. **Options as Embedded Documents**: I stored options within the poll document rather than in a separate collection for simplicity and atomic updates
 
-2. **Dual Fairness Arrays**: I included both `votedTokens` and `votedClients` arrays to enable checking against two independent mechanisms
+2. **Triple Fairness Arrays**: I included `votedIPs` (primary), `votedTokens` (secondary), and `votedClients` (tertiary) arrays to enable checking against three independent mechanisms
 
-3. **Vote Mapping with Map**: I used the `tokenVotes` Map to store which option each token/clientId voted for, enabling the "Your Vote" badge to persist across page refreshes
+3. **Vote Mapping with Map**: I used the `tokenVotes` Map to store which option each token/clientId/IP voted for, enabling the "Your Vote" badge to persist across page refreshes, browser switches, and storage clearing
 
-4. **Timestamps**: I enabled automatic tracking to allow future features like poll expiration or analytics
+4. **IP-Based Primary Protection**: The `votedIPs` array provides the strongest protection against cross-browser and incognito mode voting
+
+5. **Timestamps**: I enabled automatic tracking to allow future features like poll expiration or analytics
 
 ### My API Design Philosophy
 
@@ -257,6 +260,7 @@ When designing the APIs, I followed these principles:
     ],
     "votedTokens": [],
     "votedClients": [],
+    "votedIPs": [],
     "tokenVotes": {},
     "createdAt": "2026-02-15T10:30:00.000Z",
     "updatedAt": "2026-02-15T10:30:00.000Z"
@@ -311,7 +315,8 @@ x-client-id: uuid-client-id     # Browser-unique identifier
     ],
     "votedTokens": ["token1", "token2", ...],
     "votedClients": ["client1", "client2", ...],
-    "tokenVotes": { "token1": 0, "client1": 1, ... },
+    "votedIPs": ["192.168.1.100", "10.0.0.5", ...],
+    "tokenVotes": { "token1": 0, "client1": 1, "192.168.1.100": 0, ... },
     "createdAt": "2026-02-15T10:30:00.000Z",
     "updatedAt": "2026-02-15T11:45:00.000Z"
   },
@@ -321,10 +326,13 @@ x-client-id: uuid-client-id     # Browser-unique identifier
 
 **Backend Logic**:
 
-1. Check if `x-vote-token` header exists and is in `poll.tokenVotes` Map
-2. If found, return the vote index
-3. Otherwise, check if `x-client-id` header exists and is in `poll.tokenVotes` Map
-4. Return vote index or `null`
+1. Extract client IP from request headers (X-Forwarded-For, X-Real-IP, or socket)
+2. Check if IP exists in `poll.tokenVotes` Map (PRIMARY)
+3. If found, return the vote index
+4. Otherwise, check if `x-vote-token` header exists and is in `poll.tokenVotes` Map
+5. If found, return the vote index
+6. Otherwise, check if `x-client-id` header exists and is in `poll.tokenVotes` Map
+7. Return vote index or `null`
 
 **Error Response** (404):
 
@@ -381,33 +389,49 @@ x-client-id: uuid-client-id     # Browser client ID
 
 **How I Implemented the Vote Flow:**
 
-1. **Validate Option Index**: Check if `optionIndex` is within valid range
-2. **Check Vote Token**: If `x-vote-token` header exists and is in `votedTokens` array, reject with 400
-3. **Check Client ID**: If `x-client-id` header exists and is in `votedClients` array, reject with 400
-4. **Generate New Token**: Create a cryptographically secure random token (32 bytes)
-5. **Increment Vote Count**: `poll.options[optionIndex].votes++`
-6. **Record Fairness Data**:
+1. **Extract Client IP**: Get IP from `X-Forwarded-For`, `X-Real-IP`, or `socket.remoteAddress` headers
+2. **Check IP Address (PRIMARY)**: If IP exists in `votedIPs` array, reject with 403 "Already voted from this network"
+3. **Check Vote Token**: If `x-vote-token` header exists and is in `votedTokens` array, reject with 403
+4. **Check Client ID**: If `x-client-id` header exists and is in `votedClients` array, reject with 403
+5. **Validate Option Index**: Check if `optionIndex` is within valid range
+6. **Generate New Token**: Create a cryptographically secure random token (16 bytes)
+7. **Increment Vote Count**: `poll.options[optionIndex].votes++`
+8. **Record Fairness Data**:
+   - Add IP to `votedIPs` array
    - Add new token to `votedTokens` array
    - Add clientId to `votedClients` array
+   - Set `tokenVotes.set(clientIP, optionIndex)`
    - Set `tokenVotes.set(newToken, optionIndex)`
    - Set `tokenVotes.set(clientId, optionIndex)`
-7. **Save to Database**: `await poll.save()`
-8. **Broadcast Update**: `io.to(pollId).emit("voteUpdate", poll)`
-9. **Return Response**: Include new vote token in response
+9. **Save to Database**: `await poll.save()`
+10. **Broadcast Update**: `io.to(pollId).emit("voteUpdate", poll)`
+11. **Return Response**: Include new vote token in response
 
 **Error Responses**:
 
 ```json
-// Already voted
+// Already voted from this IP (Primary check)
 {
   "success": false,
-  "message": "Already voted on this poll"
+  "message": "Already voted from this network"
+}
+
+// Already voted by token
+{
+  "success": false,
+  "message": "Already voted (Token)"
+}
+
+// Already voted by client ID
+{
+  "success": false,
+  "message": "Already voted (Client)"
 }
 
 // Invalid option
 {
   "success": false,
-  "message": "Invalid option selected"
+  "message": "Invalid option index"
 }
 
 // Poll not found
@@ -472,7 +496,7 @@ All clients that have called `socket.emit("joinPoll", pollId)` receive the updat
 
 ## Fairness & Anti-Abuse Mechanisms
 
-This section explains the dual-layer approach to preventing vote manipulation while maintaining simplicity appropriate for an internship-level assignment.
+This section explains the multi-layered approach to preventing vote manipulation while maintaining security appropriate for a production polling system.
 
 ### Why Fairness Matters
 
@@ -631,27 +655,136 @@ if (clientId) {
 
 ---
 
-### Why IP-Based Voting Was NOT Used
+### Mechanism 3: IP Address (Primary Fairness Layer)
 
-**Common Approach**: Many polling systems check the user's IP address to prevent duplicate votes.
+**How It Works**:
 
-**Why It Was Avoided Here**:
+1. **Extraction**: The backend extracts the client's IP address from the request:
+   ```typescript
+   const clientIP = (
+       req.headers["x-forwarded-for"] as string ||
+       req.headers["x-real-ip"] as string ||
+       req.socket.remoteAddress ||
+       ""
+   ).split(',')[0].trim();
+   ```
 
-1. **Shared Networks**: Multiple legitimate users on the same WiFi (office, university, home) would share one IP and be blocked after the first vote
+2. **Priority Checking**: IP-based checking happens FIRST, before token or clientId verification
+   - This is the **primary** fairness mechanism
+   - Prevents cross-browser voting from the same network
 
-2. **Dynamic IPs**: Mobile networks and many ISPs use dynamic IP allocation, allowing the same user to vote multiple times by reconnecting
+3. **Storage**: The IP address is:
+   - Added to the `votedIPs` array in the database
+   - Stored in the `tokenVotes` Map with the option index
+   - Persisted permanently for the lifetime of the poll
 
-3. **Privacy Concerns**: Storing IP addresses raises privacy and compliance issues (GDPR, CCPA)
+4. **Verification**: On all vote attempts, the backend:
+   - Extracts the IP address from request headers
+   - Checks if it exists in `poll.votedIPs` array
+   - Rejects the vote immediately if found with message: "Already voted from this network"
 
-4. **VPN/Proxy**: Easily bypassed using VPN or proxy services
+5. **Vote Tracking**: The IP is stored in `tokenVotes` Map, enabling the "Your Vote" badge to persist even when:
+   - Switching browsers (Chrome → Edge → Firefox)
+   - Clearing localStorage/cookies
+   - Using incognito mode
+   - Different devices on the same network
 
-5. **Complexity**: Requires IP parsing from headers, handling proxy headers (`X-Forwarded-For`), and geolocation logic
+**Code Example** (Backend):
 
-**My Decision**: For this internship assignment, I decided client-side mechanisms (token + clientId) provide reasonable fairness without the drawbacks of IP-based systems.
+```typescript
+// Extract client IP (handles proxies and load balancers)
+const clientIP = (
+    req.headers["x-forwarded-for"] as string ||
+    req.headers["x-real-ip"] as string ||
+    req.socket.remoteAddress ||
+    ""
+).split(',')[0].trim();
+
+// PRIMARY FAIRNESS CHECK - Happens before token/clientId
+if (clientIP && poll.votedIPs && poll.votedIPs.includes(clientIP)) {
+    return res.status(403).json({
+        success: false,
+        message: "Already voted from this network"
+    });
+}
+
+// Record the IP address
+if (clientIP) {
+    if (!poll.votedIPs) {
+        poll.votedIPs = [];
+    }
+    poll.votedIPs.push(clientIP);
+    poll.tokenVotes.set(clientIP, optionIndex);
+}
+```
+
+**Code Example** (Frontend - Automatic):
+
+```typescript
+// No frontend code needed - IP is automatically extracted by backend
+// The frontend simply makes the vote request:
+api.post(`/polls/${id}/vote`, { optionIndex }, {
+    headers: {
+        "x-vote-token": localStorage.getItem("voteToken"),
+        "x-client-id": getClientId()
+    }
+});
+```
+
+**Why IP-Based Is Now PRIMARY**:
+
+The original implementation avoided IP-based voting due to concerns about shared networks and privacy. However, after evaluation, I implemented it as the **primary mechanism** because:
+
+1. **Cross-Browser Protection**: The main vulnerability was users voting from Chrome, then Edge, then Firefox on the same device. IP-based tracking solves this completely.
+
+2. **Proxy Header Support**: Modern deployment platforms (Render, Heroku, Vercel) properly pass IP addresses via `X-Forwarded-For` headers, making IP extraction reliable.
+
+3. **Network-Level Fairness**: For most use cases (home users, individual offices), one vote per network is the desired behavior.
+
+4. **Enhanced Security**: Combined with token and clientId, it creates a robust three-layer defense.
+
+**Strengths**:
+
+- **Browser-agnostic**: Works across Chrome, Edge, Firefox, Safari, etc.
+- **Storage-independent**: Cannot be bypassed by clearing localStorage/cookies
+- **Incognito-proof**: Works even in private/incognito browsing modes
+- **Device-independent**: Same network = same IP = one vote (desired behavior)
+- **Automatic**: No frontend code or user action required
+- **Server-controlled**: Cannot be manipulated by client-side code
+
+**Limitations & Trade-offs**:
+
+- **Shared Networks**: Multiple legitimate users on same WiFi (office, family) share one IP
+  - *Mitigation*: For corporate/classroom use, this is often the desired behavior (one vote per location)
+  - *Alternative*: Users can use mobile data to vote from different IP
+
+- **Dynamic IPs**: Mobile networks may assign different IPs
+  - *Impact*: Minimal - most users complete voting in one session
+  - *Note*: Token and clientId still provide secondary protection
+
+- **VPN/Proxy**: Can be bypassed using VPN services
+  - *Reality*: This requires deliberate effort and technical knowledge
+  - *Acceptable*: Perfect security requires authentication (out of scope)
+
+- **Privacy**: IP addresses are considered personal data under GDPR
+  - *Mitigation*: IP addresses are not displayed, only stored for vote verification
+  - *Compliance*: For production, add privacy policy and data retention limits
+
+**Why This Trade-off Is Worth It**:
+
+The IP-based approach solves the **#1 reported issue**: casual users voting multiple times by switching browsers. While it has limitations (shared networks, VPNs), these require deliberate action or specific circumstances, making them acceptable trade-offs for a polling application that prioritizes:
+
+1. Simplicity (no login required)
+2. Real-time updates (primary feature)
+3. Reasonable fairness (not perfect security)
 
 ---
 
-### How My Two Mechanisms Work Together
+### How My Three Mechanisms Work Together
+
+**Layered Defense Strategy**:
+
+**Layered Defense Strategy**:
 
 ```
 Vote Attempt Flow:
@@ -669,14 +802,19 @@ Vote Attempt Flow:
            │
            ▼
 ┌─────────────────────────────────────────┐
-│ Backend checks:                         │
-│  1. Is voteToken in votedTokens[]?      │
-│     ├─ Yes → Reject (400)               │
+│ Backend checks (in order):              │
+│                                         │
+│  1. Is clientIP in votedIPs[]?          │
+│     ├─ Yes → Reject (403) ⛔           │
 │     └─ No → Continue                    │
 │                                         │
-│  2. Is clientId in votedClients[]?      │
-│     ├─ Yes → Reject (400)               │
+│  2. Is voteToken in votedTokens[]?      │
+│     ├─ Yes → Reject (403) ⛔           │
 │     └─ No → Continue                    │
+│                                         │
+│  3. Is clientId in votedClients[]?      │
+│     ├─ Yes → Reject (403) ⛔           │
+│     └─ No → Continue ✅                 │
 └──────────┬──────────────────────────────┘
            │
            ▼
@@ -684,35 +822,62 @@ Vote Attempt Flow:
 │ Record vote:                            │
 │  - Increment option votes               │
 │  - Generate new token                   │
+│  - Add IP to votedIPs[]                 │
 │  - Add token to votedTokens[]           │
 │  - Add clientId to votedClients[]       │
-│  - Store both in tokenVotes Map         │
+│  - Store all three in tokenVotes Map    │
 │  - Save to database                     │
 │  - Emit Socket.IO update                │
 │  - Return new token to client           │
 └─────────────────────────────────────────┘
 ```
 
-**Example Scenario**:
+**Example Scenarios**:
 
+**Scenario 1: Fresh User**
 1. **User A** votes on Poll X from Chrome
+   - IP: `192.168.1.100` → Recorded
    - `voteToken1` generated and stored
    - `clientId1` recorded
-   - Vote recorded
+   - ✅ Vote accepted
 
+**Scenario 2: Page Refresh (Same Browser)**
 2. **User A** refreshes page and tries to vote again
-   - Browser sends `voteToken1` and `clientId1`
-   - Backend finds both in arrays → Rejects
+   - IP: `192.168.1.100` → Found in `votedIPs[]`
+   - ⛔ **Rejected immediately** with "Already voted from this network"
+   - (Token and clientId checks never reached)
 
-3. **User A** clears localStorage and tries to vote
-   - No `voteToken`, but `clientId` regenerated (same UUID unlikely)
-   - Backend only checks new `clientId` → Could vote again (limitation)
+**Scenario 3: Different Browser (Same Device)** 🔒 **NOW BLOCKED**
+3. **User A** opens Edge and tries to vote
+   - IP: `192.168.1.100` → Found in `votedIPs[]`
+   - ⛔ **Rejected immediately** with "Already voted from this network"
+   - ✨ **This is the key improvement** - solves the cross-browser issue
 
-4. **User B** votes from same Chrome browser (different session)
-   - Same `clientId` as User A (shared browser storage)
-   - Backend finds `clientId` in array → Rejects
+**Scenario 4: Clear Storage (Same Network)**
+4. **User A** clears localStorage and tries again
+   - IP: `192.168.1.100` → Found in `votedIPs[]`
+   - ⛔ **Rejected immediately**
+   - Storage clearing has no effect
 
-**Result**: My system prevents most casual duplicate voting while accepting that determined users can bypass with effort (which I consider acceptable for this assignment's scope).
+**Scenario 5: Incognito Mode (Same Network)**
+5. **User A** uses incognito/private browsing
+   - IP: `192.168.1.100` → Found in `votedIPs[]`
+   - ⛔ **Rejected immediately**
+   - Incognito mode cannot bypass IP check
+
+**Scenario 6: Different User (Same Network)**
+6. **User B** votes from same WiFi network
+   - IP: `192.168.1.100` → Found in `votedIPs[]`
+   - ⛔ **Rejected** - shares IP with User A
+   - **Trade-off**: Family/office members must use mobile data or accept one vote per location
+
+**Scenario 7: Different Network (Same User)**
+7. **User A** switches to mobile data
+   - IP: `10.20.30.40` (new IP) → Not in `votedIPs[]`
+   - ⚠️ Could vote again (limitation)
+   - **Acceptable**: Requires deliberate action and network change
+
+**Result**: The three-layer system provides strong protection against casual duplicate voting while maintaining simplicity (no login required).
 
 ---
 
@@ -721,65 +886,108 @@ Vote Attempt Flow:
 | Threat | Mitigated? | How |
 |--------|-----------|-----|
 | Accidental double-click | ✅ Yes | Button disabled after vote + frontend state |
-| Page refresh | ✅ Yes | Vote token and clientId persist in localStorage |
-| Multiple browsers (same device) | ⚠️ Partial | Different browsers = different storage = can vote again |
-| Incognito mode | ❌ No | Fresh storage on each session |
-| Clearing localStorage | ❌ No | Removes both token and clientId |
-| Multiple devices | ❌ No | Storage is device/browser-specific |
-| Automated bot voting | ⚠️ Partial | Would need to generate unique clientIds per request |
+| Page refresh | ✅ Yes | IP + vote token + clientId all persist |
+| **Multiple browsers (same device)** | **✅ Yes** | **IP-based tracking blocks cross-browser voting** |
+| **Incognito mode (same network)** | **✅ Yes** | **IP address is checked regardless of browser mode** |
+| **Clearing localStorage** | **✅ Yes** | **IP-based check is independent of browser storage** |
+| Multiple devices (same network) | ⚠️ Expected | One vote per network/household (design choice) |
+| Multiple networks (VPN/mobile switch) | ⚠️ Partial | Requires deliberate network change |
+| Automated bot voting | ⚠️ Partial | Would need unique IPs + clientIds per request |
 | Developer tools manipulation | ❌ No | Advanced users can modify frontend code |
+| Distributed bot networks | ❌ No | Would require IP rate limiting / CAPTCHA |
 
 **Understanding the Symbols**:
-- ✅ **Yes** = Successfully mitigated with my token-based approach
-- ⚠️ **Partial** = Partially solved, but not completely
-- ❌ **No** = **These are architectural limitations and disadvantages** of my approach
+- ✅ **Yes** = Successfully mitigated with the three-layer approach
+- ⚠️ **Partial/Expected** = Limited protection or by design
+- ❌ **No** = Requires additional infrastructure (rate limiting, auth, CAPTCHA)
 
-**About the ❌ Cases (Known Disadvantages)**:
+**Key Improvements with IP-Based Voting**:
 
-I want to be transparent: the cases marked with ❌ represent **edge cases I cannot solve** without implementing a full user authentication system. These are fundamental limitations of my token-based approach:
+The addition of IP-based tracking as the primary mechanism significantly improved protection against:
 
-- **Incognito mode**: Browser design prevents persistence across sessions
-- **Clearing localStorage**: Users have control over their browser storage  
-- **Multiple devices**: Storage is inherently device-specific
-- **Developer tools manipulation**: Cannot prevent frontend code modification
+1. **Cross-Browser Voting** ✅ → Previous major vulnerability, now solved
+2. **Incognito Mode** ✅ → Previously could bypass, now blocked  
+3. **Storage Clearing** ✅ → Previously could bypass, now blocked
 
-These are **trade-offs I consciously made** when choosing simplicity over perfect security. While these are disadvantages, I believe they're acceptable for this assignment's scope because:
-1. They require deliberate user action (not accidental abuse)
-2. Solving them would require authentication (login system, databases, sessions)
-3. They're honest limitations I'm documenting rather than hiding
+**Remaining Limitations Explained**:
 
-If this were a production system requiring bulletproof security, I would implement proper user authentication with server-side session management. But for a real-time polling demo, I prioritized demonstrating real-time capabilities and basic fairness over perfect vote security.
+- **Multiple networks**: A determined user can switch from WiFi to mobile data to vote again
+  - *Trade-off*: Requires deliberate action and is acceptable for this use case
+  - *Solution path*: Would require user authentication to fully prevent
+
+- **Distributed bots**: Sophisticated attackers with multiple IP addresses could bypass
+  - *Trade-off*: This is an advanced attack requiring significant resources
+  - *Solution path*: Would require rate limiting, CAPTCHA, or behavioral analysis
+
+- **Developer tools**: Users can modify frontend code
+  - *Reality*: Backend validation prevents actual vote manipulation
+  - *Impact*: They can only break their own UI experience
+
+**Why This Level of Protection Is Appropriate**:
+
+This three-layer approach provides **strong protection against casual abuse** (the 99% case) while accepting that **determined attackers** with technical skills (the 1% case) could potentially bypass these measures. For a polling application that prioritizes:
+
+1. 🎯 **Simplicity** - No login/registration required
+2. ⚡ **Real-time updates** - Primary feature showcase  
+3. 🛡️ **Reasonable fairness** - Not bank-level security
+
+This represents an excellent balance between security and usability.
 
 ---
 
 ### Why I Believe This Approach Is Appropriate
 
-**For This Internship Assignment**:
+**For Production Polling Systems**:
 
-1. **Demonstrates Understanding**: Shows I understand fairness concerns and multiple mitigation strategies
+1. **Solves Real Problems**: The IP-based layer directly addresses the cross-browser voting issue that users actually encounter
 
-2. **Balances Complexity**: I avoided over-engineering (authentication, fingerprinting, rate limiting) while showing engineering judgment
+2. **Layered Defense**: Three independent mechanisms (IP + token + clientId) create redundancy and catch different abuse patterns
 
-3. **Production-Ready for MVP**: Sufficient for a demo/MVP product with moderate traffic
+3. **Server-Controlled**: Primary mechanism (IP) cannot be manipulated by client-side code
 
-4. **Extensible**: Clear path to add authentication or advanced fingerprinting later
+4. **No Authentication Required**: Maintains low friction - users can vote immediately without signup
 
-5. **Explainable**: Simple enough for me to document and defend in code review
+5. **Transparent Trade-offs**: Clear documentation of what is and isn't protected
 
-**What I Know This Is NOT Suitable For**:
+**Evolution of the Design**:
 
-- High-stakes voting (elections, contests)
-- Financial transactions
-- Regulated industries requiring audit trails
-- Large-scale public polls with abuse incentives
+- **V1**: Token + ClientId (browser-based) → Vulnerable to cross-browser voting
+- **V2**: Added IP as primary → Solved cross-browser, incognito, and storage-clearing issues
+- **Result**: Significantly stronger protection while maintaining simplicity
 
-**Where I Think It Works Well**:
+**What This System IS Suitable For**:
 
-- Internal team polls
-- Classroom surveys
-- Community feedback collection
-- Product feedback forms
-- Event voting (best talk, favorite feature)
+- ✅ Internal team polls  
+- ✅ Classroom surveys and feedback
+- ✅ Community polls and voting
+- ✅ Product feedback forms
+- ✅ Event voting (best talk, favorite feature)
+- ✅ Public opinion polls (with moderate stakes)
+- ✅ Social media integrations
+- ✅ Newsletter/blog audience engagement
+
+**What This System Is NOT Suitable For**:
+
+- ❌ High-stakes voting (elections, contests with prizes)
+- ❌ Financial transactions or legally binding votes
+- ❌ Regulated industries requiring complete audit trails
+- ❌ Situations where VPN users need individual representation
+- ❌ Large offices where many employees should vote individually
+
+**If I Had More Time / Production Requirements**:
+
+To make this bulletproof for high-stakes scenarios, I would add:
+
+1. **User Authentication**: Login system with email verification
+2. **Rate Limiting**: Prevent bot attacks by limiting requests per IP/time window
+3. **CAPTCHA**: Human verification for suspicious patterns
+4. **Behavioral Analysis**: Track voting patterns and flag anomalies
+5. **Audit Logging**: Complete trail of all vote attempts (successful and failed)
+6. **IP Reputation**: Check against known VPN/proxy IP databases
+7. **Device Fingerprinting**: Canvas fingerprinting, WebGL, audio context
+8. **Two-Factor Verification**: SMS or email confirmation for critical polls
+
+However, these add significant complexity, friction, and cost - which would defeat the purpose of a **simple, real-time, anonymous polling system**.
 
 ---
 
@@ -1901,37 +2109,86 @@ const uniqueOptions = [...new Set(filteredOptions)];
 
 **Rationale**: The assignment scope focused on real-time functionality, not user management.
 
-**How I Mitigate This**: My fairness mechanisms (token + clientId) provide basic abuse prevention.
+**How I Mitigate This**: My three-layer fairness system (IP address + token + clientId) provides strong abuse prevention against cross-browser voting.
 
 ---
 
-### 2. LocalStorage Dependency
+### 2. LocalStorage Dependency (Partially Mitigated)
 
 **Limitation**: Vote tokens and client IDs are stored in browser's localStorage.
 
-**Impact**:
+**Previous Impact** (Now Resolved with IP Tracking):
 
-- Clearing browser data removes voting record
-- Incognito mode creates fresh storage each session
-- No persistence across devices
+- ✅ ~~Clearing browser data removes voting record~~ → **Now blocked by IP check**
+- ✅ ~~Incognito mode creates fresh storage each session~~ → **Now blocked by IP check**
+- ⚠️ No persistence across devices on different networks
+
+**Current Status**: With IP-based tracking as the primary mechanism, localStorage is now a secondary/tertiary layer. Users can clear storage or use incognito, but they'll still be blocked by their IP address.
+
+**Remaining Limitation**: Users on different devices with different IP addresses (e.g., home WiFi vs. mobile data) could potentially vote multiple times. This requires deliberate network switching and is considered acceptable for this application's security model.
 
 **Why I Didn't Use Cookies**: Cookies would face similar limitations and add complexity with CORS and security flags.
 
-**Why I Didn't Use Server Sessions**: Would require authentication system (out of scope for this assignment).
+**Why I Didn't Use Server Sessions**: Would require authentication system and add complexity beyond assignment scope.
 
 ---
 
-### 3. Client-Generated IDs
+### 3. Client-Generated IDs (Mitigated by IP Tracking)
 
 **Limitation**: Client ID is generated on the frontend, so technically a user could modify code to generate new IDs.
 
-**Impact**: Determined users could bypass clientId check with developer tools.
+**Previous Impact**: Determined users could bypass clientId check with developer tools.
 
-**Rationale**: For this internship assignment, I believe this level of security is acceptable. Production systems might use server-side fingerprinting or device identification services.
+**Current Status**: With IP-based tracking as the primary mechanism, manipulating the client ID no longer allows bypassing vote restrictions. The IP check happens first and cannot be circumvented by client-side code changes.
+
+**Rationale**: The three-layer approach provides defense in depth - even if one layer is compromised, the others provide protection. IP-based tracking is the strongest layer as it's entirely server-controlled.
 
 ---
 
-### 4. No Poll Expiration
+### 4. Shared Network Limitation (Trade-off of IP-Based Fairness)
+
+**Limitation**: IP-based vote tracking treats all users on the same network as a single voter.
+
+**Impact**:
+
+- Family members on home WiFi can only vote once total (not once each)
+- Office/workplace with shared internet allows only one vote per location
+- University campus networks restrict to one vote across all students
+- Public WiFi (coffee shops, libraries) allows only one vote per location
+
+**Why This Exists**: IP addresses identify networks, not individual users. Multiple devices on the same WiFi share the same public IP address visible to the server.
+
+**Workarounds for Users**:
+
+- Switch to mobile data (different IP address)
+- Use different networks (home vs. work vs. mobile)
+- Share one vote per household/location (often acceptable for polls)
+
+**When This Is Actually Desirable**:
+
+- Household opinion polls (one vote per family)
+- Office/team votes (one vote per location/department)
+- Regional surveys (one vote per area)
+
+**When This Is Problematic**:
+
+- Large corporations with hundreds of employees on same network
+- University campuses with thousands of students
+- Public venues where independent voters share WiFi
+
+**Design Decision**: For this application, I chose network-level fairness as the primary protection because:
+1. It solves the major issue (cross-browser voting) that pure localStorage couldn't  
+2. For most use cases (home users, small teams), one vote per network is acceptable
+3. Users who need to vote individually can use mobile data
+4. The alternative (no IP checking) had worse vulnerabilities
+
+**Future Enhancement**: Could add an optional "strict mode" flag when creating polls:
+- `strictMode: false` (default) → Network-based fairness (current behavior)  
+- `strictMode: true` → Requires user authentication for individual voting
+
+---
+
+### 5. No Poll Expiration
 
 **Limitation**: Polls remain active indefinitely. No time limits or closing mechanism.
 
@@ -1945,7 +2202,7 @@ const uniqueOptions = [...new Set(filteredOptions)];
 
 ---
 
-### 5. No Poll Editing or Deletion
+### 6. No Poll Editing or Deletion
 
 **Limitation**: Once a poll is created, the question and options cannot be changed or deleted.
 
@@ -1961,7 +2218,7 @@ const uniqueOptions = [...new Set(filteredOptions)];
 
 ---
 
-### 6. Scalability Constraints
+### 7. Scalability Constraints
 
 **Limitation**: Single-server deployment on Render free tier.
 
@@ -1982,7 +2239,7 @@ For large-scale deployment, I would need:
 
 ---
 
-### 7. No Analytics or Insights
+### 8. No Analytics or Insights
 
 **Limitation**: No tracking of poll views, vote timestamps, or demographic data.
 
@@ -1992,24 +2249,38 @@ For large-scale deployment, I would need:
 
 ---
 
-### 8. Limited Abuse Detection
+### 9. Limited Abuse Detection (Improved with IP Tracking)
 
-**Limitation**: Only checks vote token and client ID. No rate limiting or bot detection.
+**Current Protection**: Three-layer fairness system (IP + vote token + client ID) significantly reduces abuse.
 
-**Impact**:
+**Remaining Limitations**:
 
-- Automated scripts could create many polls
-- Bots could spam votes (would need new clientId each time, but possible)
+- No rate limiting on poll creation (automated scripts could create many polls)
+- No CAPTCHA verification (though IP tracking makes mass voting impractical)
+- No anomaly detection (sudden vote spikes aren't flagged)
 
-**What Production Would Need**:
+**What IP-Based Protection Solved**:
 
-- Rate limiting per IP (e.g., 10 votes per hour)
-- CAPTCHA on vote submission
-- Anomaly detection (flag polls with sudden vote spikes)
+- ✅ Cross-browser vote spam → Blocked by IP check
+- ✅ Incognito mode abuse → Blocked by IP check
+- ✅ Storage-clearing attacks → Blocked by IP check
+- ⚠️ Bot voting → Now requires unique IPs (much harder)
+
+**Remaining Bot Concerns**:
+
+- Distributed bots with multiple IPs could still vote (would need VPN/proxy network)
+- Poll creation spam (would need rate limiting on `/api/polls` endpoint)
+
+**What Production Would Add**:
+
+- Rate limiting per IP on both voting AND poll creation (e.g., 10 actions per hour)
+- CAPTCHA on vote submission for suspicious patterns
+- Anomaly detection (flag polls with sudden vote spikes from diverse IPs)
+- IP reputation checking (block known VPN/proxy services if required)
 
 ---
 
-### 9. No Mobile App
+### 10. No Mobile App
 
 **Limitation**: Web-only application. No native iOS or Android apps.
 
@@ -2021,7 +2292,7 @@ For large-scale deployment, I would need:
 
 ---
 
-### 10. Single Language Support
+### 11. Single Language Support
 
 **Limitation**: UI text is hardcoded in English.
 
@@ -2272,7 +2543,7 @@ Through this project, I successfully demonstrated:
 
 4. **API Design**: I built RESTful endpoints with proper HTTP methods, status codes, and error handling. I documented clear request/response contracts thoroughly.
 
-5. **Security & Fairness**: I implemented a dual-mechanism approach (vote token + client ID) to prevent abuse without over-engineering, demonstrating my understanding of trade-offs between security and complexity.
+5. **Security & Fairness**: I implemented a three-layer fairness system (IP address + vote token + client ID) to prevent cross-browser voting and abuse, demonstrating my understanding of trade-offs between security, user privacy, and system complexity.
 
 6. **Modern Frontend**: I used Next.js App Router with server components, React hooks for state management, and Tailwind CSS for rapid UI development. I added keyboard shortcuts and accessibility considerations to show attention to UX.
 

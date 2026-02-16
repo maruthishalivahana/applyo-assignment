@@ -11,6 +11,38 @@ import crypto from "crypto";
  * 3. Client ID (Tertiary) - Browser fingerprint for additional tracking
  */
 
+/**
+ * Extract client IP address from request headers
+ * Handles proxy headers from deployment platforms like Render, Heroku, etc.
+ */
+function getClientIP(req: Request): string {
+    // Try x-forwarded-for first (most common for proxies)
+    const forwarded = req.headers['x-forwarded-for'];
+    if (forwarded) {
+        const ip = (typeof forwarded === 'string' ? forwarded : forwarded[0]).split(',')[0].trim();
+        if (ip && ip !== '::1' && ip !== '127.0.0.1') {
+            return ip;
+        }
+    }
+
+    // Try x-real-ip header
+    const realIp = req.headers['x-real-ip'];
+    if (realIp && typeof realIp === 'string') {
+        if (realIp !== '::1' && realIp !== '127.0.0.1') {
+            return realIp;
+        }
+    }
+
+    // Fall back to socket address
+    const socketIp = req.socket.remoteAddress || '';
+    if (socketIp && socketIp !== '::1' && socketIp !== '127.0.0.1') {
+        return socketIp;
+    }
+
+    // In development, return localhost identifier
+    return 'localhost';
+}
+
 
 
 export const createPoll = async (req: Request, res: Response) => {
@@ -107,12 +139,7 @@ export const getPoll = async (req: Request, res: Response) => {
         const clientId = req.headers["x-client-id"] as string | undefined;
 
         // Get client IP address
-        const clientIP = (
-            req.headers["x-forwarded-for"] as string ||
-            req.headers["x-real-ip"] as string ||
-            req.socket.remoteAddress ||
-            ""
-        ).split(',')[0].trim();
+        const clientIP = getClientIP(req);
 
         let userVotedOption: number | null = null;
 
@@ -150,12 +177,8 @@ export const votePoll = async (req: Request, res: Response) => {
         const clientId = req.headers["x-client-id"] as string | undefined;
 
         // Get client IP address (primary fairness mechanism)
-        const clientIP = (
-            req.headers["x-forwarded-for"] as string ||
-            req.headers["x-real-ip"] as string ||
-            req.socket.remoteAddress ||
-            ""
-        ).split(',')[0].trim();
+        const clientIP = getClientIP(req);
+        console.log('Vote attempt from IP:', clientIP);
 
         const poll = await Poll.findById(req.params.id);
         if (!poll) {
@@ -163,6 +186,11 @@ export const votePoll = async (req: Request, res: Response) => {
                 success: false,
                 message: "Poll not found"
             });
+        }
+
+        // Initialize votedIPs if it doesn't exist (for backward compatibility with old polls)
+        if (!poll.votedIPs) {
+            poll.votedIPs = [];
         }
 
         if (optionIndex < 0 || optionIndex >= poll.options.length) {
@@ -173,7 +201,8 @@ export const votePoll = async (req: Request, res: Response) => {
         }
 
         // PRIMARY FAIRNESS CHECK: IP-based
-        if (clientIP && poll.votedIPs && poll.votedIPs.includes(clientIP)) {
+        if (clientIP && clientIP !== 'localhost' && poll.votedIPs.includes(clientIP)) {
+            console.log('Duplicate vote blocked for IP:', clientIP);
             return res.status(403).json({
                 success: false,
                 message: "Already voted from this network"
@@ -209,10 +238,8 @@ export const votePoll = async (req: Request, res: Response) => {
         }
 
         // Store IP address (primary fairness mechanism)
-        if (clientIP) {
-            if (!poll.votedIPs) {
-                poll.votedIPs = [];
-            }
+        // Don't store localhost to allow development testing
+        if (clientIP && clientIP !== 'localhost') {
             poll.votedIPs.push(clientIP);
         }
 
@@ -225,7 +252,7 @@ export const votePoll = async (req: Request, res: Response) => {
         if (clientId) {
             poll.tokenVotes.set(clientId, optionIndex);
         }
-        if (clientIP) {
+        if (clientIP && clientIP !== 'localhost') {
             poll.tokenVotes.set(clientIP, optionIndex);
         }
 
@@ -246,6 +273,7 @@ export const votePoll = async (req: Request, res: Response) => {
         });
 
     } catch (error) {
+        console.error("Vote error:", error);
         return res.status(500).json({
             success: false,
             message: "Failed to vote",

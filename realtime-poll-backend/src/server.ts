@@ -21,6 +21,9 @@ const io = new Server(server, {
     allowEIO3: true
 });
 
+// Trust proxy - important for getting real IP addresses in production
+app.set('trust proxy', true);
+
 app.use(cors());
 app.use(express.json());
 
