@@ -2689,6 +2689,6 @@ applyo-assignment/
 
 **Deployment URLs**:
 
-- Frontend: `https://your-app.vercel.app`
-- Backend: `https://your-backend.onrender.com`
+- Frontend: `https://applyo-assignment-ab47.vercel.app/`
+- Backend: `https://applyo-assignment-1.onrender.com`
 - Database: MongoDB Atlas (private connection)
